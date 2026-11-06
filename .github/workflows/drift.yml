@@ -80,3 +80,29 @@ jobs:
             } else {
               await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body: text, labels: ['drift'] });
             }
+
+  # TEMPORARY diagnostic job; removed before merge.
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.PP_CLIENT_ID }}
+          tenant-id: ${{ vars.PP_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Probe
+        env:
+          TENANT: ${{ vars.PP_TENANT_ID }}
+          GROUP: a11f3e78-0fb1-40a6-a2d5-9fc369765c2a
+        run: |
+          set -u
+          PP=$(az account get-access-token --resource https://api.powerplatform.com/ --query accessToken -o tsv)
+          BAP=$(az account get-access-token --resource https://service.powerapps.com/ --query accessToken -o tsv)
+          echo "token roles/scp claims:"; echo "$PP" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ('aud','appid','roles','scp','idtyp')})"
+          probe() { code=$(curl -s -o /tmp/body -w '%{http_code}' -H "Authorization: Bearer $2" "$1"); echo "$code  $1"; [ "$code" != "200" ] && head -c 400 /tmp/body && echo; }
+          probe "https://${TENANT}.tenant.api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$PP"
+          probe "https://api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$PP"
+          probe "https://api.powerplatform.com/governance/ruleSets?api-version=2024-10-01" "$PP"
+          probe "https://api.powerplatform.com/environmentmanagement/environmentGroups?api-version=2024-10-01" "$PP"
+          probe "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01" "$BAP"
+          probe "https://api.powerplatform.com/governance/ruleBasedPolicies?api-version=2024-10-01" "$PP"
