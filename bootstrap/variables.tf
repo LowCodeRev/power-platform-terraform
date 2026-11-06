@@ -57,6 +57,12 @@ variable "github_apply_environment" {
   default     = "production"
 }
 
+variable "github_plan_environment" {
+  description = "GitHub Environment (no protection rules) that read-only jobs bind to. Its federated credential lets plan, drift and adoption jobs authenticate from any branch, since the OIDC subject becomes environment:<name> instead of the branch ref."
+  type        = string
+  default     = "plan"
+}
+
 variable "ado_federation" {
   description = "Optional Azure DevOps workload identity federation. Fill from the service connection's 'Workload Identity federation (manual)' dialog."
   type = object({

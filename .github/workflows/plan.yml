@@ -56,6 +56,10 @@ jobs:
       fail-fast: false
       matrix:
         root: [governance, environments]
+    # The "plan" environment has no protection rules. Binding to it makes the OIDC subject
+    # repo:<owner>/<repo>:environment:plan on every branch and trigger, which is the trust the
+    # service principal grants to read-only jobs. Without it, dispatched runs on bot branches cannot sign in.
+    environment: plan
     defaults:
       run:
         working-directory: ${{ matrix.root }}

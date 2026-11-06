@@ -32,6 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         root: [governance, environments]
+    environment: plan # read-only trust; see plan.yml
     defaults:
       run:
         working-directory: ${{ matrix.root }}
@@ -84,6 +85,7 @@ jobs:
   # TEMPORARY diagnostic job; removed before merge.
   probe:
     runs-on: ubuntu-latest
+    environment: plan
     steps:
       - uses: azure/login@v2
         with:

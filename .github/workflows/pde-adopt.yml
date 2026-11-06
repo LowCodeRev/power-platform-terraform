@@ -31,6 +31,7 @@ concurrency:
 jobs:
   adopt:
     runs-on: ubuntu-latest
+    environment: plan # read-only trust; see plan.yml
     env:
       GH_TOKEN: ${{ github.token }}
       PDE_GROUP_NAME: Personal Developer Environments
