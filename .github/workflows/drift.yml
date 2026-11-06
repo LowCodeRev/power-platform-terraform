@@ -101,8 +101,12 @@ jobs:
           PP=$(az account get-access-token --resource https://api.powerplatform.com/ --query accessToken -o tsv)
           BAP=$(az account get-access-token --resource https://service.powerapps.com/ --query accessToken -o tsv)
           echo "token roles/scp claims:"; echo "$PP" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ('aud','appid','roles','scp','idtyp')})"
-          probe() { code=$(curl -s -o /tmp/body -w '%{http_code}' -H "Authorization: Bearer $2" "$1"); echo "$code  $1"; [ "$code" != "200" ] && head -c 400 /tmp/body && echo; }
+          probe() { code=$(curl -s -o /tmp/body -w '%{http_code}' -H "Authorization: Bearer $2" "$1" || echo "curl-fail"); echo "$code  $1"; [ "$code" != "200" ] && head -c 600 /tmp/body; echo; true; }
+          TENANT_NODASH=$(echo "$TENANT" | tr -d '-')
           probe "https://${TENANT}.tenant.api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$PP"
+          probe "https://${TENANT_NODASH}.tenant.api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$PP"
+          probe "https://${TENANT_NODASH}.tenant.api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$BAP"
+          probe "https://${TENANT_NODASH}.tenant.api.powerplatform.com/governance/environmentGroups?api-version=2021-10-01-preview" "$PP"
           probe "https://api.powerplatform.com/governance/environmentGroups/${GROUP}/ruleSets?api-version=2021-10-01-preview" "$PP"
           probe "https://api.powerplatform.com/governance/ruleSets?api-version=2024-10-01" "$PP"
           probe "https://api.powerplatform.com/environmentmanagement/environmentGroups?api-version=2024-10-01" "$PP"
