@@ -108,7 +108,9 @@ Data sources worth using: `connectors` (full connector catalogue with `unblockab
 GitHub repo (this folder)
 ├── bootstrap/            run ONCE, as you (az login, use_cli). Local or Azure state.
 │   ├── identity.tf       azuread app + SPN + API permissions + admin consent
-│   ├── pp_admin.tf       powerplatform_admin_management_application
+│   ├── pp_admin.tf       powerplatform_admin_management_application (legacy BAP admin API)
+│   ├── pp_rbac.tf        powerplatform_rbac_role_assignment: Contributor at tenant scope (api.powerplatform.com)
+│   ├── graph.tf          Graph app roles so CI can manage the PP-Makers group
 │   ├── federation.tf     GitHub OIDC federated credentials (main branch + PR + environment)
 │   └── state.tf          (optional) Azure RG + storage account + container for remote state
 ├── governance/           tenant-wide, one state file, applied by CI via OIDC

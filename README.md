@@ -70,6 +70,11 @@ terraform plan        # must report "No changes"
 If `terraform apply` in step 1 fails on the admin management application with a consent or scope error, run
 `az login --allow-no-subscriptions --tenant lowcoderev.ai --scope https://api.powerplatform.com/.default` and retry.
 
+The service principal needs two separate Power Platform grants, both in bootstrap: the admin management application
+registration (`pp_admin.tf`, covers the legacy BAP admin API) and a Power Platform RBAC role assignment
+(`pp_rbac.tf`, Contributor at tenant scope, covers `api.powerplatform.com` and the governance host). Missing the
+second one shows up as a bare `403 Forbidden` on environment group rule sets and rule-based policies.
+
 ## CI variables (GitHub repository settings, Variables not Secrets, nothing here is secret)
 
 | Variable | Value |
