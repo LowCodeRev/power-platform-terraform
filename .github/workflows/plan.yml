@@ -1,0 +1,117 @@
+name: plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "governance/**"
+      - "environments/**"
+      - "modules/**"
+      - ".github/workflows/plan.yml"
+
+permissions:
+  id-token: write # OIDC token for Entra workload identity federation
+  contents: read
+  pull-requests: write # plan summary comment
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  # microsoft/power-platform provider: OIDC via GitHub's ACTIONS_ID_TOKEN_REQUEST_* variables
+  POWER_PLATFORM_USE_OIDC: "true"
+  POWER_PLATFORM_CLIENT_ID: ${{ vars.PP_CLIENT_ID }}
+  POWER_PLATFORM_TENANT_ID: ${{ vars.PP_TENANT_ID }}
+  # azurerm backend: same federated identity
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+  ARM_CLIENT_ID: ${{ vars.PP_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.PP_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+  plan:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [governance, environments]
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: |
+          terraform init -no-color \
+            -backend-config="resource_group_name=rg-tf-state" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color -lock-timeout=5m -out=tfplan -detailed-exitcode > plan.txt 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          cat plan.txt
+          if [ "$code" -eq 1 ]; then exit 1; fi
+
+      - name: comment plan on PR
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: actions/github-script@v7
+        env:
+          ROOT: ${{ matrix.root }}
+          EXIT: ${{ steps.plan.outputs.exitcode }}
+        with:
+          script: |
+            const fs = require('fs');
+            const root = process.env.ROOT;
+            const exit = process.env.EXIT;
+            let body = fs.readFileSync(`${root}/plan.txt`, 'utf8');
+            if (body.length > 60000) body = body.slice(0, 60000) + '\n...(truncated)';
+            const status = exit === '0' ? 'no changes' : exit === '2' ? 'changes pending' : 'FAILED';
+            const marker = `<!-- tfplan:${root} -->`;
+            const text = `${marker}\n### terraform plan: \`${root}\` (${status})\n\n<details><summary>Show plan</summary>\n\n\`\`\`\n${body}\n\`\`\`\n</details>`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: text });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: text });
+            }

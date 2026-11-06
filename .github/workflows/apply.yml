@@ -1,0 +1,78 @@
+name: apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "governance/**"
+      - "environments/**"
+      - "modules/**"
+      - ".github/workflows/apply.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  POWER_PLATFORM_USE_OIDC: "true"
+  POWER_PLATFORM_CLIENT_ID: ${{ vars.PP_CLIENT_ID }}
+  POWER_PLATFORM_TENANT_ID: ${{ vars.PP_TENANT_ID }}
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+  ARM_CLIENT_ID: ${{ vars.PP_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.PP_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+jobs:
+  # Governance first (tenant settings, groups, DLP), then environments that may reference groups.
+  governance:
+    runs-on: ubuntu-latest
+    environment: production # required reviewer configured in repo settings; its federated credential subject is repo:<owner>/<repo>:environment:production
+    defaults:
+      run:
+        working-directory: governance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+      - name: terraform init
+        run: |
+          terraform init -no-color \
+            -backend-config="resource_group_name=rg-tf-state" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="use_azuread_auth=true"
+      - name: terraform apply
+        run: terraform apply -no-color -lock-timeout=5m -auto-approve
+
+  environments:
+    needs: governance
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: environments
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+      - name: terraform init
+        run: |
+          terraform init -no-color \
+            -backend-config="resource_group_name=rg-tf-state" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="use_azuread_auth=true"
+      - name: terraform apply
+        run: terraform apply -no-color -lock-timeout=5m -auto-approve

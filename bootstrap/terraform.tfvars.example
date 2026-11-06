@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+github_repository        = "<github-owner>/<repo-name>"
+github_apply_environment = "production"
+
+# Add later for Azure DevOps (values shown by the service connection's manual WIF dialog):
+# ado_federation = {
+#   issuer  = "https://vstoken.dev.azure.com/<org-guid>"
+#   subject = "sc://<org>/<project>/<service-connection-name>"
+# }

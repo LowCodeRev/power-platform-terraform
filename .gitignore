@@ -1,0 +1,34 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Secrets and local-only values (commit the .example files instead)
+*.tfvars
+!*.tfvars.example
+backend.hcl
+*.pem
+*.pfx
+*.pkcs12
+
+# Generated config drafts from `terraform plan -generate-config-out`
+generated*.tf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code personal overrides
+.claude/settings.local.json
