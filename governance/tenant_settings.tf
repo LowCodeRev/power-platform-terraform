@@ -1,5 +1,11 @@
-# Tenant-wide settings. Imported from the live tenant on 2026-11-06; values below are the current state so the
-# first apply is a no-op. Change a value here, open a PR, and the plan shows exactly what will flip.
+# Tenant-wide settings. Imported from the live tenant on 2026-11-06. Change a value here, open a PR, and the plan
+# shows exactly what will flip.
+#
+# Policy (2026-11-06): environment creation of every kind (production, sandbox, trial, developer) and Power Pages
+# site creation are admin-only. Makers request a personal developer environment through the ITSM portal and the
+# request is provisioned from this repository (see environments/pde-requests). Environment routing stays off for
+# the same reason: routing would auto-create developer environments on first use, bypassing the request process.
+# Connections cannot be shared with "everyone".
 #
 # Attributes deprecated for provider v5 (disable_nps_comments_reachout, disable_survey_feedback,
 # enable_open_ai_bot_publishing, disable_create_from_image, disable_create_from_figma) are intentionally unset.
@@ -7,10 +13,10 @@
 resource "powerplatform_tenant_settings" "this" {
   walk_me_opt_out                                       = false
   disable_support_tickets_visible_by_all_users          = true
-  disable_trial_environment_creation_by_non_admin_users = false
+  disable_trial_environment_creation_by_non_admin_users = true
   disable_capacity_allocation_by_environment_admins     = false
-  disable_environment_creation_by_non_admin_users       = false
-  disable_portals_creation_by_non_admin_users           = false
+  disable_environment_creation_by_non_admin_users       = true
+  disable_portals_creation_by_non_admin_users           = true
   disable_newsletter_sendout                            = false
 
   power_platform = {
@@ -29,7 +35,7 @@ resource "powerplatform_tenant_settings" "this" {
       enable_guests_to_make                    = false
       disable_maker_match                      = false
       disable_unused_license_assignment        = false
-      disable_connection_sharing_with_everyone = false
+      disable_connection_sharing_with_everyone = true
     }
 
     power_automate = {
@@ -42,7 +48,7 @@ resource "powerplatform_tenant_settings" "this" {
 
     governance = {
       disable_admin_digest                                      = false
-      disable_developer_environment_creation_by_non_admin_users = false
+      disable_developer_environment_creation_by_non_admin_users = true
       enable_default_environment_routing                        = false
       environment_routing_all_makers                            = false
 
