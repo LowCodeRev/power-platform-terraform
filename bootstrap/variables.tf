@@ -39,6 +39,18 @@ variable "github_repository" {
   }
 }
 
+variable "github_owner_id" {
+  description = "Numeric ID of the GitHub owner (user or org). GitHub embeds it in the OIDC subject as owner@id. `gh api users/<owner> --jq .id`"
+  type        = number
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Numeric ID of the GitHub repository. GitHub embeds it in the OIDC subject as repo@id. `gh api repos/<owner>/<repo> --jq .id`"
+  type        = number
+  default     = null
+}
+
 variable "github_apply_environment" {
   description = "Name of the GitHub Environment the apply workflow runs in. A federated credential is created for it so the approval gate cannot be bypassed."
   type        = string

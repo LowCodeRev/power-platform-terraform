@@ -1,6 +1,10 @@
 # Copy to terraform.tfvars (git-ignored) and fill in.
 github_repository        = "<github-owner>/<repo-name>"
 github_apply_environment = "production"
+# Numeric IDs are embedded in GitHub's OIDC subject claim and are required for the trust to match:
+#   gh api users/<owner> --jq .id      gh api repos/<owner>/<repo> --jq .id
+github_owner_id          = 0
+github_repository_id     = 0
 
 # Add later for Azure DevOps (values shown by the service connection's manual WIF dialog):
 # ado_federation = {
