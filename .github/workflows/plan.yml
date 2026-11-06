@@ -2,7 +2,7 @@ name: plan
 
 on:
   pull_request:
-    branches: [main]
+    # No branches filter: stacked PRs (base = another feature branch) must get a plan too.
     # No paths filter: these checks are required by branch protection, so they must run on every PR.
   # Bot-opened PRs (pde-adopt, pde-decommission) do not trigger pull_request events; those workflows dispatch
   # this one on their branch instead. The check runs land on the same commit and satisfy the ruleset.
