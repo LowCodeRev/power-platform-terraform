@@ -81,3 +81,5 @@ If `terraform apply` in step 1 fails on the admin management application with a 
 Repository: `LowCodeRev/power-platform-terraform`. The federated credentials on the app trust exactly:
 `refs/heads/main`, pull requests, and the GitHub Environment `production`. Create that Environment with
 yourself as a required reviewer before the first apply run, and protect `main` so the `plan` check must pass.
+
+First PR: exercises the plan workflow and the service principal OIDC path.
