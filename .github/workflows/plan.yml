@@ -3,11 +3,7 @@ name: plan
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "governance/**"
-      - "environments/**"
-      - "modules/**"
-      - ".github/workflows/plan.yml"
+    # No paths filter: these checks are required by branch protection, so they must run on every PR.
 
 permissions:
   id-token: write # OIDC token for Entra workload identity federation
