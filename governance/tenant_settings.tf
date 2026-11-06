@@ -49,8 +49,14 @@ resource "powerplatform_tenant_settings" "this" {
     governance = {
       disable_admin_digest                                      = false
       disable_developer_environment_creation_by_non_admin_users = true
-      enable_default_environment_routing                        = false
-      environment_routing_all_makers                            = false
+
+      # Environment routing: members of PP-Makers get a managed developer environment created for them in the
+      # "Personal Developer Environments" group the first time they open a maker portal. Routing is unaffected
+      # by the developer-creation setting above, which only governs manual creation.
+      enable_default_environment_routing              = true
+      environment_routing_all_makers                  = false
+      environment_routing_target_environment_group_id = powerplatform_environment_group.pde.id
+      environment_routing_target_security_group_id    = azuread_group.pp_makers.object_id
 
       policy = {
         enable_desktop_flow_data_policy_management = false

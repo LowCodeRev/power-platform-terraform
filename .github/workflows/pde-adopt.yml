@@ -1,0 +1,172 @@
+name: pde-adopt
+
+# Nightly: bring environments created by environment routing under Terraform management, and report any
+# environment that exists outside the process.
+#
+#   1. List every environment as the service principal.
+#   2. Developer environments inside the "Personal Developer Environments" group that have no record yet get a
+#      record in environments/pde-requests/ with environment_id set. A PR is opened, the plan check is
+#      dispatched on it, and auto-merge is enabled: PP-Makers membership was the approval, so the adoption needs
+#      no second review. The apply still waits on the production environment gate.
+#   3. Any other environment that is neither a static resource in environments/*.tf nor recorded opens or
+#      updates a "Unmanaged environments" issue. Terraform's drift job cannot see resources it does not know
+#      about; this is the complement.
+
+on:
+  schedule:
+    - cron: "30 10 * * *" # 10:30 UTC daily, before the 11:00 drift run
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write # dispatch the plan workflow on the adoption branch
+
+concurrency:
+  group: pde-adopt
+  cancel-in-progress: false
+
+jobs:
+  adopt:
+    runs-on: ubuntu-latest
+    environment: plan # read-only trust; see plan.yml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PDE_GROUP_NAME: Personal Developer Environments
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in as the Terraform service principal (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.PP_CLIENT_ID }}
+          tenant-id: ${{ vars.PP_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Discover environments
+        id: discover
+        shell: python
+        run: |
+          import json, os, re, subprocess, glob, datetime, urllib.request
+
+          def token(resource):
+              return subprocess.check_output(["az", "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"], text=True).strip()
+
+          def get(url, tok):
+              req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          pp = token("https://api.powerplatform.com/")
+          bap = token("https://service.powerapps.com/")
+
+          groups = get("https://api.powerplatform.com/environmentmanagement/environmentGroups?api-version=2024-10-01", pp).get("value", [])
+          pde_group = next((g for g in groups if g.get("displayName") == os.environ["PDE_GROUP_NAME"]), None)
+          if not pde_group:
+              raise SystemExit("PDE environment group not found; has the governance root been applied?")
+          pde_group_id = pde_group["id"]
+
+          envs = get("https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01", bap).get("value", [])
+
+          # The environment list only carries the creator's object id; resolve name and UPN through Graph
+          # (the service principal holds User.Read.All).
+          graph = token("https://graph.microsoft.com/")
+          def resolve_user(oid):
+              try:
+                  u = get(f"https://graph.microsoft.com/v1.0/users/{oid}?$select=userPrincipalName,displayName", graph)
+                  return (u.get("userPrincipalName") or "").lower(), u.get("displayName") or ""
+              except Exception:
+                  return "", ""
+
+          recorded = set()
+          for f in glob.glob("environments/pde-requests/*.json"):
+              with open(f) as fh:
+                  recorded.add(json.load(fh).get("environment_id"))
+          static_tf = "".join(open(f).read() for f in glob.glob("environments/*.tf"))
+
+          new_records, unexpected = [], []
+          for e in envs:
+              p = e["properties"]
+              eid = e["name"]
+              if eid in recorded or eid in static_tf:
+                  continue
+              in_pde_group = (p.get("parentEnvironmentGroup") or {}).get("id") == pde_group_id
+              if p.get("environmentSku") == "Developer" and in_pde_group:
+                  who = p.get("createdBy") or {}
+                  lem = p.get("linkedEnvironmentMetadata") or {}
+                  upn = (who.get("userPrincipalName") or who.get("email") or "").lower()
+                  name = who.get("displayName") or ""
+                  if not upn or not name:
+                      r_upn, r_name = resolve_user(who.get("id") or "")
+                      upn, name = upn or r_upn, name or r_name
+                  rec = {
+                      "ticket": "ROUTED",
+                      "source": "environment-routing",
+                      "environment_id": eid,
+                      "requester_upn": upn,
+                      "requester_object_id": (who.get("id") or "").lower(),
+                      "requester_name": name or upn,
+                      "display_name": p.get("displayName"),
+                      "justification": "Personal developer environment created by environment routing (PP-Makers membership).",
+                      "requested_on": (p.get("createdTime") or datetime.date.today().isoformat())[:10],
+                      "approved_by": "environment-routing",
+                      "environment_type": "Developer",
+                      "location": p.get("location") or e.get("location") or "unitedstates",
+                      "azure_region": p.get("azureRegion"),
+                      "cadence": ((p.get("updateCadence") or {}).get("id")) or "Frequent",
+                      "release_cycle": p.get("releaseCycle"),
+                      "language_code": lem.get("baseLanguage") or 1033,
+                      "currency_code": (lem.get("currency") or {}).get("code") or "USD",
+                  }
+                  rec = {k: v for k, v in rec.items() if v not in (None, "")}
+                  new_records.append(rec)
+              else:
+                  unexpected.append({"id": eid, "name": p.get("displayName"), "type": p.get("environmentSku"),
+                                     "group": (p.get("parentEnvironmentGroup") or {}).get("id"), "createdBy": (p.get("createdBy") or {}).get("userPrincipalName")})
+
+          os.makedirs("environments/pde-requests", exist_ok=True)
+          for rec in new_records:
+              with open(f"environments/pde-requests/routed-{rec['environment_id']}.json", "w") as fh:
+                  json.dump(rec, fh, indent=2); fh.write("\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"new_count={len(new_records)}\n")
+              out.write(f"unexpected_count={len(unexpected)}\n")
+              out.write("summary<<EOF\n" + "\n".join(f"- {r['display_name']} ({r['requester_upn']}) `{r['environment_id']}`" for r in new_records) + "\nEOF\n")
+              out.write("unexpected<<EOF\n" + "\n".join(f"- **{u['name']}** `{u['id']}` type {u['type']}, group {u['group']}, created by {u['createdBy']}" for u in unexpected) + "\nEOF\n")
+          print(f"new: {len(new_records)}, unexpected: {len(unexpected)}")
+
+      - name: Open adoption PR
+        if: steps.discover.outputs.new_count != '0'
+        env:
+          SUMMARY: ${{ steps.discover.outputs.summary }}
+        run: |
+          set -euo pipefail
+          branch="pde/adopt-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
+          git config user.name "pde-adopt bot"
+          git config user.email "pde-adopt@lowcoderev.ai"
+          git checkout -b "$branch"
+          git add environments/pde-requests
+          git commit -q -m "Adopt routed personal developer environments" -m "$SUMMARY"
+          git push -u origin "$branch"
+          url=$(gh pr create --base main --head "$branch" --label pde,pde-adopt \
+            --title "Adopt routed personal developer environments ($(date -u +%Y-%m-%d))" \
+            --body "$(printf 'Environments created by environment routing for PP-Makers members. Membership was the approval; this PR only brings them under Terraform management via import.\n\n%s\n\nAuto-merge is enabled once the plan checks pass. The apply still waits on the production environment reviewer.' "$SUMMARY")")
+          # Pull requests opened with the workflow token do not trigger the plan workflow; dispatch it on the branch.
+          gh workflow run plan.yml --ref "$branch"
+          gh pr merge --auto --squash "$url"
+          echo "### Adoption PR: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report unmanaged environments
+        if: steps.discover.outputs.unexpected_count != '0'
+        env:
+          UNEXPECTED: ${{ steps.discover.outputs.unexpected }}
+        run: |
+          set -euo pipefail
+          title="Unmanaged environments detected"
+          body="$(printf 'These environments exist in the tenant but are neither static resources in environments/*.tf nor recorded personal developer environments. Someone created them outside the process, or a routed environment landed outside the PDE group.\n\n%s\n\nRun: %s/%s/actions/runs/%s' "$UNEXPECTED" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          existing=$(gh issue list --label drift --state open --search "$title in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue comment "$existing" --body "$body"; else gh issue create --title "$title" --label drift --body "$body"; fi

@@ -2,8 +2,11 @@ name: plan
 
 on:
   pull_request:
-    branches: [main]
+    # No branches filter: stacked PRs (base = another feature branch) must get a plan too.
     # No paths filter: these checks are required by branch protection, so they must run on every PR.
+  # Bot-opened PRs (pde-adopt, pde-decommission) do not trigger pull_request events; those workflows dispatch
+  # this one on their branch instead. The check runs land on the same commit and satisfy the ruleset.
+  workflow_dispatch:
 
 permissions:
   id-token: write # OIDC token for Entra workload identity federation
@@ -53,6 +56,10 @@ jobs:
       fail-fast: false
       matrix:
         root: [governance, environments]
+    # The "plan" environment has no protection rules. Binding to it makes the OIDC subject
+    # repo:<owner>/<repo>:environment:plan on every branch and trigger, which is the trust the
+    # service principal grants to read-only jobs. Without it, dispatched runs on bot branches cannot sign in.
+    environment: plan
     defaults:
       run:
         working-directory: ${{ matrix.root }}
@@ -86,7 +93,7 @@ jobs:
           if [ "$code" -eq 1 ]; then exit 1; fi
 
       - name: comment plan on PR
-        if: always() && steps.plan.outcome != 'skipped'
+        if: always() && steps.plan.outcome != 'skipped' && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         env:
           ROOT: ${{ matrix.root }}

@@ -11,7 +11,8 @@ See `PLAN.md` for the research, phased plan, and tenant inventory.
 | `bootstrap/` | local, then migrated to Azure Storage | you, interactively | App registration, Power Platform admin registration, CI federation, state storage |
 | `governance/` | Azure Storage `governance.tfstate` | CI (OIDC) or you | Tenant settings, tenant isolation, DLP, environment groups and rule sets |
 | `environments/` | Azure Storage `environments.tfstate` | CI (OIDC) or you | Environment lifecycle and managed environment settings |
-| `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection |
+| `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection, nightly PDE adoption, PDE decommission |
+| `modules/pde/` | | | One personal developer environment per record; adopted from environment routing nightly. See [docs/pde-process.md](docs/pde-process.md) |
 
 ## Local runs
 
@@ -68,6 +69,11 @@ terraform plan        # must report "No changes"
 
 If `terraform apply` in step 1 fails on the admin management application with a consent or scope error, run
 `az login --allow-no-subscriptions --tenant lowcoderev.ai --scope https://api.powerplatform.com/.default` and retry.
+
+The service principal needs two separate Power Platform grants, both in bootstrap: the admin management application
+registration (`pp_admin.tf`, covers the legacy BAP admin API) and a Power Platform RBAC role assignment
+(`pp_rbac.tf`, Contributor at tenant scope, covers `api.powerplatform.com` and the governance host). Missing the
+second one shows up as a bare `403 Forbidden` on environment group rule sets and rule-based policies.
 
 ## CI variables (GitHub repository settings, Variables not Secrets, nothing here is secret)
 

@@ -18,6 +18,7 @@ locals {
     main         = "repo:${local.github_repo_segment}:ref:refs/heads/main"
     pull_request = "repo:${local.github_repo_segment}:pull_request"
     apply_env    = "repo:${local.github_repo_segment}:environment:${var.github_apply_environment}"
+    plan_env     = "repo:${local.github_repo_segment}:environment:${var.github_plan_environment}"
   }
 }
 
