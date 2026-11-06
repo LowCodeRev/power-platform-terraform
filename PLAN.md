@@ -396,8 +396,12 @@ Remaining for you:
 3. Create the ADO organization at dev.azure.com when convenient; nothing depends on it yet.
 4. Delete the stray `sp-power-platform` app registration (`0cb5c736-...`) once CI is proven.
 
-Next build work after that: Phase 4 governance baseline (DLP in `governance/dlp.tf` is drafted and commented
-out, rule set for the R+D group is drafted and commented out in `governance/env_groups.tf`).
+Phase 4 in flight (2026-11-06): PR "Governance baseline: DLP policies and R+D rule set" adds two DLP policies
+(tenant-wide baseline with consumer connectors blocked and Microsoft 365 as Business; default environment
+locked to core Microsoft 365 with everything else blocked) and the Managed Environments rule set for the R+D
+group (sharing limits, usage insights, Solution Checker warn, 7-day backups). Verified against the live
+connector inventory so no existing app or flow is affected. Still to decide: tenant settings hardening
+(non-admin environment creation, trial creation, portal creation, environment routing).
 
 ---
 
