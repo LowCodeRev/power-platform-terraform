@@ -1,0 +1,168 @@
+name: pde-request
+
+# Intake for personal developer environments (PDEs).
+#
+# Triggered either by an admin from the Actions tab (workflow_dispatch) or by the ITSM portal through the
+# GitHub REST API (repository_dispatch with event_type "pde-request" and the same fields in client_payload).
+# The job writes environments/pde-requests/<TICKET>.json on a branch and opens a pull request. The normal
+# plan / review / gated apply flow does the provisioning.
+#
+# Token note: pull requests opened with the default GITHUB_TOKEN do not trigger other workflows, so the plan
+# check would not run on them. Set a fine-grained PAT (contents + pull requests, this repo only) as the
+# PDE_BOT_TOKEN secret; the job uses it when present and falls back to GITHUB_TOKEN otherwise.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: provision or decommission
+        type: choice
+        options: [provision, decommission]
+        default: provision
+      ticket:
+        description: ITSM ticket ID, e.g. REQ-0001
+        required: true
+      requester_upn:
+        description: Requester's UPN
+        required: true
+      requester_object_id:
+        description: Requester's Entra object ID (GUID)
+        required: true
+      requester_name:
+        description: Requester's display name
+        required: true
+      justification:
+        description: Why the environment is needed
+        required: true
+      approved_by:
+        description: UPN of the approver in the ITSM portal
+        required: true
+      environment_type:
+        description: Developer (default) or Sandbox
+        type: choice
+        options: [Developer, Sandbox]
+        default: Developer
+  repository_dispatch:
+    types: [pde-request]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pde-request-${{ github.event.inputs.ticket || github.event.client_payload.ticket }}
+  cancel-in-progress: false
+
+jobs:
+  open-request:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PDE_BOT_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PDE_BOT_TOKEN || github.token }}
+
+      - name: Normalise inputs
+        id: req
+        shell: python
+        env:
+          INPUTS: ${{ toJSON(github.event.inputs) }}
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          import json, os, re, datetime
+          src = json.loads(os.environ["INPUTS"] or "null") or json.loads(os.environ["PAYLOAD"] or "null") or {}
+          action = (src.get("action") or "provision").lower()
+          ticket = (src.get("ticket") or "").strip().upper()
+          upn = (src.get("requester_upn") or "").strip()
+          oid = (src.get("requester_object_id") or "").strip().lower()
+          name = (src.get("requester_name") or "").strip()
+          just = (src.get("justification") or "").strip()
+          appr = (src.get("approved_by") or "").strip()
+          etype = (src.get("environment_type") or "Developer").strip()
+          errors = []
+          if action not in ("provision", "decommission"): errors.append("action must be provision or decommission")
+          if not re.fullmatch(r"[A-Z]+-\d+", ticket): errors.append("ticket must look like REQ-0001")
+          if action == "provision":
+              if not re.fullmatch(r"[^@\s]+@lowcoderev\.ai", upn, re.I): errors.append("requester_upn must be a lowcoderev.ai UPN")
+              if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", oid): errors.append("requester_object_id must be a GUID")
+              if not name: errors.append("requester_name is required")
+              if len(just) < 10: errors.append("justification must be at least 10 characters")
+              if not re.fullmatch(r"[^@\s]+@lowcoderev\.ai", appr, re.I): errors.append("approved_by must be a lowcoderev.ai UPN")
+              if etype not in ("Developer", "Sandbox"): errors.append("environment_type must be Developer or Sandbox")
+          if errors:
+              raise SystemExit("Invalid request:\n - " + "\n - ".join(errors))
+          record = {
+              "ticket": ticket,
+              "requester_upn": upn,
+              "requester_object_id": oid,
+              "requester_name": name,
+              "display_name": f"PDE - {name}",
+              "justification": just,
+              "requested_on": datetime.date.today().isoformat(),
+              "approved_by": appr,
+              "environment_type": etype,
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"action={action}\nticket={ticket}\nupn={upn}\nname={name}\napproved_by={appr}\netype={etype}\n")
+              out.write("record<<EOF\n" + json.dumps(record, indent=2) + "\nEOF\n")
+
+      - name: Write or remove the request record
+        id: file
+        env:
+          ACTION: ${{ steps.req.outputs.action }}
+          TICKET: ${{ steps.req.outputs.ticket }}
+          RECORD: ${{ steps.req.outputs.record }}
+        run: |
+          set -euo pipefail
+          f="environments/pde-requests/${TICKET}.json"
+          if [ "$ACTION" = "provision" ]; then
+            if [ -e "$f" ]; then echo "::error::$f already exists; a PDE for $TICKET is already recorded"; exit 1; fi
+            printf '%s\n' "$RECORD" > "$f"
+          else
+            if [ ! -e "$f" ]; then echo "::error::$f does not exist; nothing to decommission"; exit 1; fi
+            git rm -q "$f"
+          fi
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        env:
+          ACTION: ${{ steps.req.outputs.action }}
+          TICKET: ${{ steps.req.outputs.ticket }}
+          UPN: ${{ steps.req.outputs.upn }}
+          NAME: ${{ steps.req.outputs.name }}
+          APPROVED_BY: ${{ steps.req.outputs.approved_by }}
+          ETYPE: ${{ steps.req.outputs.etype }}
+          PATH_: ${{ steps.file.outputs.path }}
+        run: |
+          set -euo pipefail
+          branch="pde/${TICKET,,}-${ACTION}"
+          git config user.name "pde-request bot"
+          git config user.email "pde-request@lowcoderev.ai"
+          git checkout -b "$branch"
+          git add -A environments/pde-requests
+          if [ "$ACTION" = "provision" ]; then
+            title="PDE ${TICKET}: provision ${ETYPE} environment for ${NAME}"
+            body="ITSM ticket **${TICKET}** requests a personal developer environment.
+
+| Field | Value |
+|---|---|
+| Requester | ${NAME} (${UPN}) |
+| Approved in ITSM by | ${APPROVED_BY} |
+| Environment type | ${ETYPE} |
+| Record | \`${PATH_}\` |
+
+The plan comment below shows exactly what will be created. Merge to provision; the apply waits for the environment reviewer.
+
+If the apply fails creating a **Developer** environment (the requester has no Developer Plan, or the service principal is refused), re-run the request with \`environment_type=Sandbox\`."
+          else
+            title="PDE ${TICKET}: decommission"
+            body="Decommission the personal developer environment recorded for ITSM ticket **${TICKET}**.
+
+The plan comment below shows the environment being **destroyed**. Merge and approve the apply only after the maker has exported anything they need."
+          fi
+          git commit -q -m "$title" -m "Requested through the pde-request workflow (${{ github.event_name }}) by ${{ github.actor }}."
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" --title "$title" --body "$body" --label pde
+          echo "### $title" >> "$GITHUB_STEP_SUMMARY"
+          gh pr view "$branch" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

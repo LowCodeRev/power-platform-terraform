@@ -403,6 +403,14 @@ group (sharing limits, usage insights, Solution Checker warn, 7-day backups). Ve
 connector inventory so no existing app or flow is affected. Still to decide: tenant settings hardening
 (non-admin environment creation, trial creation, portal creation, environment routing).
 
+PDE request process (PR "Personal developer environments: request intake, module, group rules"): makers no
+longer create environments. The ITSM portal (or an admin from the Actions tab) triggers the `pde-request`
+workflow, which writes `environments/pde-requests/<TICKET>.json` and opens a PR; merge + approved apply
+provisions a Developer environment owned by the maker (Sandbox fallback with the maker as System
+Administrator) inside the "Personal Developer Environments" group. Decommission is the same path in reverse.
+Process doc: docs/pde-process.md. First sample request: ticket REQ-0001 for Tony Stark, raised after merge.
+Tenant settings hardening is PR #3 (all six options; developer environment creation also closed, no routing).
+
 ---
 
 ## 8. Switching between Azure DevOps and GitHub Actions
