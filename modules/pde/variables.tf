@@ -1,9 +1,9 @@
 variable "ticket" {
-  description = "ITSM ticket ID the environment was requested under, e.g. REQ-0001."
+  description = "ITSM ticket ID the environment was requested under (e.g. REQ-0001), or ROUTED for environments created by environment routing."
   type        = string
   validation {
-    condition     = can(regex("^[A-Z]+-[0-9]+$", var.ticket))
-    error_message = "ticket must look like REQ-0001."
+    condition     = can(regex("^([A-Z]+-[0-9]+|ROUTED)$", var.ticket))
+    error_message = "ticket must look like REQ-0001, or be ROUTED."
   }
 }
 
@@ -25,7 +25,13 @@ variable "requester_name" {
 }
 
 variable "display_name" {
-  description = "Environment display name. Defaults to 'PDE - <requester name>'."
+  description = "Environment display name. Defaults to 'PDE - <requester name>'. Adopted environments keep the name routing gave them."
+  type        = string
+  default     = null
+}
+
+variable "description" {
+  description = "Environment description. Defaults to a sentence built from the request record."
   type        = string
   default     = null
 }
@@ -35,12 +41,12 @@ variable "justification" {
 }
 
 variable "requested_on" {
-  description = "ISO date the request was raised."
+  description = "ISO date the request was raised, or the environment's creation date when adopted."
   type        = string
 }
 
 variable "approved_by" {
-  description = "UPN of the ITSM approver."
+  description = "UPN of the ITSM approver, or 'environment-routing' when the approval was PP-Makers membership."
   type        = string
 }
 
@@ -62,6 +68,22 @@ variable "environment_group_id" {
 variable "location" {
   type    = string
   default = "unitedstates"
+}
+
+variable "azure_region" {
+  description = "Set only for adopted environments, to match what routing chose. Changing it forces replacement."
+  type        = string
+  default     = null
+}
+
+variable "cadence" {
+  type    = string
+  default = "Frequent"
+}
+
+variable "release_cycle" {
+  type    = string
+  default = null
 }
 
 variable "language_code" {

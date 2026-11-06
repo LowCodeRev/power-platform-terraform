@@ -1,8 +1,32 @@
-# PDE request records
+# PDE records
 
-One JSON file per personal developer environment, named `<TICKET>.json`. Files are written by the
-`pde-request` GitHub workflow, never by hand. Deleting a file (through the same workflow with
-`action=decommission`) destroys the environment on the next approved apply.
+One JSON file per personal developer environment. Files are written by the `pde-adopt` workflow (environments
+created by routing) and removed by the `pde-decommission` workflow. Hand-written records are for exceptions
+only and go through a normal PR.
+
+Adopted (the usual case; `environment_id` present means import, not create):
+
+```json
+{
+  "ticket": "ROUTED",
+  "source": "environment-routing",
+  "environment_id": "11111111-2222-3333-4444-555555555555",
+  "requester_upn": "tony@lowcoderev.ai",
+  "requester_object_id": "c86297e4-4aca-4bbe-b9f0-4f476e7d8b51",
+  "requester_name": "Tony Stark",
+  "display_name": "Tony Stark's Environment",
+  "justification": "Personal developer environment created by environment routing (PP-Makers membership).",
+  "requested_on": "2026-11-07",
+  "approved_by": "environment-routing",
+  "environment_type": "Developer",
+  "location": "unitedstates",
+  "azure_region": "westus",
+  "cadence": "Frequent",
+  "release_cycle": "Standard"
+}
+```
+
+Exception (no `environment_id`: Terraform creates it; `Sandbox` is the type the service principal can create):
 
 ```json
 {
@@ -10,14 +34,9 @@ One JSON file per personal developer environment, named `<TICKET>.json`. Files a
   "requester_upn": "someone@lowcoderev.ai",
   "requester_object_id": "00000000-0000-0000-0000-000000000000",
   "requester_name": "Someone Example",
-  "display_name": "PDE - Someone Example",
-  "justification": "Building a prototype for the Q1 intake form.",
+  "justification": "Needs a Sandbox because the work requires a security-group-restricted environment.",
   "requested_on": "2026-11-06",
   "approved_by": "approver@lowcoderev.ai",
-  "environment_type": "Developer"
+  "environment_type": "Sandbox"
 }
 ```
-
-`environment_type` is `Developer` by default. `Sandbox` is the fallback when a Developer environment
-cannot be created for the requester (no Developer Plan on the user, or a service-principal limitation);
-a Sandbox consumes 1 GB of tenant Dataverse capacity and the requester is made System Administrator of it.

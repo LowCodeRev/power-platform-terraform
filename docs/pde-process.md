@@ -1,79 +1,61 @@
 # Personal developer environment (PDE) process
 
-Makers do not create environments. They request one. The request is approved in the ITSM portal, provisioned
-by Terraform from this repository, and recorded here permanently.
+Makers do not create environments. Approval is membership of one security group. The platform creates the
+environment. Terraform adopts it the same night and owns it from then on. Every step is recorded in this repo.
 
 ## Flow
 
 ```mermaid
 flowchart LR
-  A[Maker raises request in ITSM] --> B[Approver approves in ITSM]
-  B --> C[ITSM calls GitHub: repository_dispatch pde-request]
-  C --> D[Workflow writes pde-requests/TICKET.json and opens a PR]
-  D --> E[plan comment: 1 environment to add]
-  E --> F[Admin merges]
-  F --> G[apply waits for reviewer, then provisions]
-  G --> H[Maker gets the environment URL from the apply output]
+  A[Maker raises request in ITSM] --> B[Approver approves]
+  B --> C[PR adds UPN to governance/makers.json]
+  C --> D[Apply: user joins PP-Makers group]
+  D --> E[Maker opens Power Apps]
+  E --> F[Environment routing creates their managed dev environment in the PDE group]
+  F --> G[Nightly pde-adopt: record written, PR auto-merges]
+  G --> H[Apply imports it: Terraform owns it]
 ```
 
-Decommissioning is the same path with `action=decommission`. The file is removed, the plan shows a destroy,
-and nothing happens until the apply is approved.
+Decommission: run the `pde-decommission` workflow with the record name. It opens a PR whose plan shows the
+destroy. Nothing is destroyed without merge and apply approval.
 
-## What the ITSM portal has to send
+## The pieces
 
-One HTTP call after approval. Authentication is a fine-grained GitHub PAT (or GitHub App) with
-`contents: write` and `pull requests: write` on this repository only. Store it in the ITSM tool's secret store.
+| Piece | Where | What it does |
+|---|---|---|
+| Approval | `governance/makers.json` | List of UPNs. A PR adding one is the request record; the reviewer is the approver. |
+| PP-Makers group | `governance/makers.tf` | Entra security group whose membership mirrors `makers.json`. |
+| Routing | `governance/tenant_settings.tf` | Environment routing on, scoped to PP-Makers, targeting the PDE environment group. Manual environment creation stays admin-only; routing is unaffected by that setting. |
+| PDE group rules | `governance/env_groups.tf` | Sharing capped at 5 and no security groups, usage insights, Solution Checker warn, 7-day backups. Applied the moment routing creates the environment. |
+| Adoption | `.github/workflows/pde-adopt.yml` | Nightly. Finds routed environments without a record, writes `environments/pde-requests/routed-<id>.json`, opens an auto-merging PR. Also reports any environment outside the process as an issue. |
+| Import | `environments/pdes.tf` | Records with `environment_id` are imported; records without one are created by Terraform (exception path). |
+| Decommission | `.github/workflows/pde-decommission.yml` | Removes a record and opens a non-auto-merging PR that plans the destroy. |
 
-```http
-POST https://api.github.com/repos/LowCodeRev/power-platform-terraform/dispatches
-Authorization: Bearer <token>
-Accept: application/vnd.github+json
-Content-Type: application/json
+## What the ITSM portal does
 
-{
-  "event_type": "pde-request",
-  "client_payload": {
-    "action": "provision",
-    "ticket": "REQ-0001",
-    "requester_upn": "tony@lowcoderev.ai",
-    "requester_object_id": "c86297e4-4aca-4bbe-b9f0-4f476e7d8b51",
-    "requester_name": "Tony Stark",
-    "justification": "Prototype the warranty-claims intake app before requesting a project environment.",
-    "approved_by": "andy@lowcoderev.ai",
-    "environment_type": "Developer"
-  }
-}
-```
+After approval, it opens a pull request that adds the requester's UPN to `governance/makers.json`. Any ITSM tool
+that can call a REST API can do this with the GitHub contents and pulls endpoints, or it can simply assign the
+ticket to an admin who opens the PR by hand. The PR, not the ticket, is the record of approval here.
 
-From Power Automate this is a single HTTP action. From ServiceNow it is an outbound REST message on the
-approval-complete business rule. The requester's Entra object ID is available in any of those systems; the
-workflow refuses requests without it.
+Removing a UPN from `makers.json` stops routing for that person. Their existing environment stays until it is
+decommissioned.
 
-An admin can also run the workflow by hand from the Actions tab with the same fields. That is how the first
-sample request was raised.
+## Why routing instead of Terraform creating the environment
 
-## What gets recorded
-
-- `environments/pde-requests/<TICKET>.json`: the request itself, including who approved it and when.
-- The pull request: the plan showing exactly what was created, who merged it, who approved the apply.
-- The git history: every change to every PDE, forever.
-- Terraform state: the environment ID and URL, readable through `terraform output pdes`.
-
-## Rules every PDE lives under
-
-PDEs are placed in the **Personal Developer Environments** environment group, whose rule set is in
-`governance/env_groups.tf`: sharing capped at 5 people and no security groups, usage insights on,
-Solution Checker warns on import, 7-day backup retention. The tenant-wide DLP baseline applies too.
+- The provider documents Developer-environment creation as unsupported under service-principal authentication.
+  Routing is done by the platform on the maker's behalf, so the limitation never applies.
+- The maker needs no Developer Plan sign-up and no tenant Dataverse capacity is consumed.
+- The environment is managed and inside the governed group from its first second.
 
 ## Known limits
 
-- **Developer type under a service principal.** The provider documents Developer-environment creation as
-  preview and "not supported with service principal authentication". The first sample request is the test. If
-  the apply is refused, the request is re-raised as `Sandbox`, which the service principal can create. A Sandbox
-  uses 1 GB of tenant Dataverse capacity (about 10 GB is free today) and the requester is made System
-  Administrator of it by Terraform.
-- **Developer Plan.** A Developer environment belongs to its owner and needs the owner to hold the free Power
-  Apps Developer Plan. Users who have never signed up for it may need to do so once.
-- **Workflow token.** Pull requests opened with the default workflow token do not trigger the plan check. Set the
-  `PDE_BOT_TOKEN` repository secret (fine-grained PAT, this repo, contents + pull requests) so the request PRs
-  get their plan comment automatically.
+- Routed environments are managed environments. A maker needs a premium license to **run** apps and flows in one;
+  building and previewing is free. The dev tenant has no premium licenses today.
+- Adoption is after the fact. Between creation and the next nightly run (at most 24 hours, or run `pde-adopt`
+  by hand) the environment exists but is not yet in Terraform state. It is still governed by the group rules
+  and DLP during that window.
+- The adoption PR auto-merges, but the apply still waits for the production environment reviewer. Dropping that
+  gate for adoption-only changes is possible later with a second, unreviewed environment used only by an
+  adoption apply job.
+- Pull requests opened by workflows do not trigger other workflows, so `pde-adopt` dispatches the plan workflow
+  on its branch explicitly. The check runs land on the same commit and satisfy the branch ruleset.

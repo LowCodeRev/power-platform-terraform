@@ -1,9 +1,12 @@
 # One personal developer environment.
 #
-# Developer type: owned by the maker, no tenant capacity consumed, created by the provider in preview and
-# documented as unsupported under service-principal auth (the first request is the test).
-# Sandbox type: the fallback the service principal can always create. Consumes 1 GB of Dataverse capacity;
-# the maker is added as System Administrator so the experience is equivalent.
+# Normal path: environment routing creates a managed Developer environment for a PP-Makers member; the nightly
+# pde-adopt workflow records it and this module imports it (see environments/pdes.tf). From then on Terraform
+# owns it: settings, group membership, and eventual decommission.
+#
+# Exception path: a record without environment_id makes Terraform create the environment itself. Developer type
+# is documented by the provider as unsupported under service-principal auth; Sandbox is the fallback the service
+# principal can always create (1 GB of Dataverse capacity, maker made System Administrator).
 
 terraform {
   required_providers {
@@ -17,7 +20,10 @@ terraform {
 locals {
   is_developer = var.environment_type == "Developer"
   display_name = coalesce(var.display_name, "PDE - ${var.requester_name}")
-  description  = "Personal developer environment. ITSM ${var.ticket}: requested by ${var.requester_upn} on ${var.requested_on}, approved by ${var.approved_by}. ${var.justification}"
+  description = coalesce(
+    var.description,
+    "Personal developer environment. ${var.ticket}: ${var.requester_upn}, ${var.requested_on}, approved by ${var.approved_by}. ${var.justification}"
+  )
 
   # Well-known Dataverse security role template id for System Administrator.
   system_administrator_role_id = "627090ff-40a3-4053-8790-584edc5be201"
@@ -29,7 +35,9 @@ resource "powerplatform_environment" "this" {
   environment_type     = var.environment_type
   owner_id             = local.is_developer ? var.requester_object_id : null
   location             = var.location
-  cadence              = "Frequent"
+  azure_region         = var.azure_region
+  cadence              = var.cadence
+  release_cycle        = var.release_cycle
   environment_group_id = var.environment_group_id
 
   dataverse = merge(
