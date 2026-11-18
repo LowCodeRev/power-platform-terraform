@@ -1,107 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
-import './App.css'
-import { STAGES, fmtDate, fmtDateTime, loadSnapshot, stageLabel, stageOf, typeOf } from './data'
-import type { Asset, Scan, Snapshot, StageKey } from './data'
+import { motion } from 'motion/react'
+import { AppWindow, ArrowRight, CalendarClock, Moon, Radar, RefreshCw, Search, Sun, Workflow } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { AssetSheet } from '@/components/asset-sheet'
+import { Conveyor, CountUp, HealthGauge, STAGE_COLOR, StagePill, TrendChart } from '@/components/parts'
+import type { Periods } from '@/components/parts'
+import { cn } from '@/lib/utils'
+import { STAGES, fmtDate, fmtDateTime, loadSnapshot, stageOf, typeOf } from './data'
+import type { Asset, Snapshot, StageKey } from './data'
 
 type StageFilter = StageKey | 'Flagged' | 'All'
+const glass = 'glass border-white/10 bg-card'
+const rise = (i: number) => ({ initial: { opacity: 0, y: 18 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.5, delay: 0.06 * i, ease: [0.16, 1, 0.3, 1] as const } })
 
-const scanCount = (s: Scan, key: StageKey): number =>
-  ({
-    Active: s.rev_activecount,
-    QuarantineWarning: s.rev_quarantinewarningcount,
-    Quarantine: s.rev_quarantinecount,
-    DeleteWarning: s.rev_deletewarningcount,
-    Delete: s.rev_deletecount,
-    Exempt: s.rev_exemptcount,
-  })[key] ?? 0
-
-function StagePill({ stage }: { stage: StageKey | null }) {
-  return <span className={`pill s-${stage ?? 'New'}`}>{stageLabel(stage)}</span>
+function daysUntil(iso?: string): number | null {
+  if (!iso) return null
+  const t = new Date(iso).getTime()
+  return Number.isNaN(t) ? null : Math.ceil((t - Date.now()) / 86400000)
 }
-
-function Trend({ scans }: { scans: Scan[] }) {
-  // Oldest to newest; flagged = everything that is not active or exempt.
-  const points = [...scans].reverse().map((s) => ({
-    when: s.rev_scanon,
-    flagged: (s.rev_totalcount ?? 0) - (s.rev_activecount ?? 0) - (s.rev_exemptcount ?? 0),
-    total: s.rev_totalcount ?? 0,
-  }))
-  if (points.length < 2) return <p className="muted">The trend appears after the second scan.</p>
-  const w = 600, h = 120, pad = 6
-  const max = Math.max(1, ...points.map((p) => p.total))
-  const x = (i: number) => pad + (i * (w - 2 * pad)) / (points.length - 1)
-  const y = (v: number) => h - pad - (v * (h - 2 * pad)) / max
-  const line = (get: (p: (typeof points)[number]) => number) => points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(get(p)).toFixed(1)}`).join(' ')
-  const last = points[points.length - 1]
-  return (
-    <div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="trend" role="img" aria-label={`Flagged assets over ${points.length} scans; latest ${last.flagged} of ${last.total}`}>
-        <path d={line((p) => p.total)} className="trend-total" />
-        <path d={line((p) => p.flagged)} className="trend-flagged" />
-      </svg>
-      <div className="legend">
-        <span><i className="swatch total" /> Tracked ({last.total})</span>
-        <span><i className="swatch flagged" /> Flagged ({last.flagged})</span>
-        <span className="muted">{fmtDate(points[0].when)} to {fmtDate(last.when)}</span>
-      </div>
-    </div>
-  )
-}
-
-function Detail({ asset, snapshot, onClose }: { asset: Asset; snapshot: Snapshot; onClose: () => void }) {
-  const events = snapshot.events.filter((e) => e._rev_asset_value === asset.rev_governedassetid)
-  const stage = stageOf(asset.rev_stage)
-  const steps: [string, string | undefined][] = [
-    ['Last activity', asset.rev_lastactivityon],
-    ['Quarantine warning', asset.rev_quarantinewarningon],
-    ['Quarantine', asset.rev_quarantineon],
-    ['Delete warning', asset.rev_deletewarningon],
-    ['Delete', asset.rev_deleteon],
-  ]
-  const now = Date.now()
-  return (
-    <aside className="drawer" aria-label="Asset detail">
-      <header>
-        <div>
-          <h2>{asset.rev_name}</h2>
-          <p className="muted">{typeOf(asset)}{asset.rev_subtype ? ` · ${asset.rev_subtype}` : ''} · {asset.rev_environmentname}</p>
-        </div>
-        <button className="ghost" onClick={onClose} aria-label="Close">✕</button>
-      </header>
-      <StagePill stage={stage} />
-      <dl>
-        <dt>Owner</dt><dd>{asset.rev_ownername || asset.rev_ownerupn || asset.rev_ownerobjectid || '—'}</dd>
-        <dt>Days inactive</dt><dd>{asset.rev_daysinactive ?? '—'}</dd>
-        <dt>Last activity from</dt><dd>{asset.rev_lastactivitysource ?? '—'}</dd>
-        <dt>Last modified</dt><dd>{fmtDate(asset.rev_lastmodifiedon)}</dd>
-        <dt>Last run</dt><dd>{fmtDate(asset.rev_lastrunon)}</dd>
-        <dt>Usage signal</dt><dd>{asset.rev_usagesignal ?? '—'}</dd>
-        {asset.rev_platformstate && (<><dt>Platform state</dt><dd>{asset.rev_platformstate}</dd></>)}
-        {asset.rev_exemptreason && (<><dt>Exempt reason</dt><dd>{asset.rev_exemptreason}</dd></>)}
-        <dt>Asset ID</dt><dd className="mono">{asset.rev_assetid}</dd>
-      </dl>
-      <h3>Timeline</h3>
-      <ol className="timeline">
-        {steps.map(([label, when]) => (
-          <li key={label} className={when && new Date(when).getTime() <= now ? 'past' : ''}>
-            <span>{label}</span><span>{fmtDate(when)}</span>
-          </li>
-        ))}
-      </ol>
-      <h3>Stage changes</h3>
-      {events.length === 0 ? <p className="muted">None recorded.</p> : (
-        <ul className="events">
-          {events.map((e) => (
-            <li key={e.rev_asseteventid}>
-              <span>{stageLabel(stageOf(e.rev_fromstage))} → {stageLabel(stageOf(e.rev_tostage))}</span>
-              <span className="muted">{fmtDateTime(e.rev_eventon)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </aside>
-  )
-}
+const spaced = (s?: string) => (s ?? '').replace(/([a-z])([A-Z])/g, '$1 $2')
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
@@ -111,6 +35,9 @@ export default function App() {
   const [type, setType] = useState<'All' | 'App' | 'Flow'>('All')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Asset | null>(null)
+  const [dark, setDark] = useState(true)
+
+  useEffect(() => { document.documentElement.classList.toggle('dark', dark) }, [dark])
 
   const refresh = () => {
     setLoading(true)
@@ -121,125 +48,245 @@ export default function App() {
   }
   useEffect(refresh, [])
 
+  const assets = useMemo(() => snapshot?.assets ?? [], [snapshot])
   const counts = useMemo(() => {
     const c = Object.fromEntries(STAGES.map((s) => [s.key, 0])) as Record<StageKey, number>
-    for (const a of snapshot?.assets ?? []) { const k = stageOf(a.rev_stage); if (k) c[k]++ }
+    for (const a of assets) { const k = stageOf(a.rev_stage); if (k) c[k]++ }
     return c
-  }, [snapshot])
+  }, [assets])
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return (snapshot?.assets ?? []).filter((a) => {
+    return assets.filter((a) => {
       const k = stageOf(a.rev_stage)
       if (stage === 'Flagged' ? k === 'Active' || k === 'Exempt' : stage !== 'All' && k !== stage) return false
       if (type !== 'All' && typeOf(a) !== type) return false
-      if (q && ![a.rev_name, a.rev_ownername, a.rev_ownerupn, a.rev_environmentname].some((v) => v?.toLowerCase().includes(q))) return false
-      return true
+      return !q || [a.rev_name, a.rev_ownername, a.rev_ownerupn, a.rev_environmentname].some((v) => v?.toLowerCase().includes(q))
     })
-  }, [snapshot, stage, type, query])
+  }, [assets, stage, type, query])
 
-  if (error) return <main className="center"><p className="error">Could not load data. {error}</p><button onClick={refresh}>Retry</button></main>
-  if (!snapshot) return <main className="center"><p className="muted">Loading…</p></main>
+  const upNext = useMemo(
+    () => assets
+      .map((a) => ({ a, days: daysUntil(a.rev_nextstageon) }))
+      .filter((x): x is { a: Asset; days: number } => x.days !== null && x.days >= 0 && !!x.a.rev_nextstage && stageOf(x.a.rev_stage) !== 'Exempt')
+      .sort((x, y) => x.days - y.days)
+      .slice(0, 6),
+    [assets],
+  )
 
-  const latest = snapshot.scans[0]
-  const realScans = snapshot.scans.filter((s) => !s.rev_istest)
-  const total = snapshot.assets.length
-  const flagged = total - counts.Active - counts.Exempt
+  const latest = snapshot?.scans[0]
+  const periods: Periods = {
+    inactive: latest?.rev_inactivedays ?? 90,
+    warnQ: latest?.rev_quarantinewarningdays ?? 14,
+    quarantined: latest?.rev_quarantineddays ?? 90,
+    warnD: latest?.rev_deletewarningdays ?? 14,
+  }
+  const total = assets.length
+  const healthy = counts.Active + counts.Exempt
+  const flagged = total - healthy
 
   return (
-    <main>
-      <header className="top">
-        <div>
-          <h1>Asset Governance</h1>
-          <p className="muted">
-            Inactive asset policy · <span className="badge">Report only</span>
-            {latest ? <> · last scan {fmtDateTime(latest.rev_scanon)}</> : ' · no scans yet'}
-          </p>
-        </div>
-        <button onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
-      </header>
+    <TooltipProvider delayDuration={100}>
+      <div className="aurora" aria-hidden><i /><i /><i /></div>
+      <main className="mx-auto grid max-w-7xl gap-5 px-4 py-6 sm:px-6">
+        <motion.header {...rise(0)} className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="grid size-11 place-content-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-white shadow-lg shadow-violet-500/30">
+              <Radar className="size-6" />
+            </div>
+            <div>
+              <h1 className="text-gradient text-2xl font-semibold tracking-tight sm:text-3xl">Asset Governance</h1>
+              <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                Inactive asset policy
+                <Badge variant="outline" className="gap-1.5">
+                  <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-emerald-400" /></span>
+                  Report only
+                </Badge>
+                {latest ? <span>Last scan {fmtDateTime(latest.rev_scanon)}</span> : snapshot && <span>No scans yet</span>}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="icon" onClick={() => setDark((d) => !d)} aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
+              {dark ? <Sun /> : <Moon />}
+            </Button>
+            <Button variant="outline" onClick={refresh} disabled={loading}>
+              <RefreshCw className={cn(loading && 'animate-spin')} /> Refresh
+            </Button>
+          </div>
+        </motion.header>
 
-      {latest?.rev_istest && (
-        <p className="notice">The latest scan was a test run with overridden periods or date, so the stages below are simulated.</p>
-      )}
+        {error && (
+          <Card className={cn(glass, 'border-destructive/50')}>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-destructive">Could not load data. {error}</p>
+              <Button variant="outline" onClick={refresh}>Retry</Button>
+            </CardContent>
+          </Card>
+        )}
 
-      <section className="tiles" aria-label="Assets by stage">
-        <button className={`tile ${stage === 'Flagged' ? 'on' : ''}`} onClick={() => setStage('Flagged')}>
-          <span className="num">{flagged}</span><span>Flagged</span><span className="muted">of {total} tracked</span>
-        </button>
-        {STAGES.map((s) => (
-          <button key={s.key} className={`tile s-${s.key} ${stage === s.key ? 'on' : ''}`} onClick={() => setStage(s.key)}>
-            <span className="num">{counts[s.key]}</span><span>{s.label}</span>
-            <span className="muted">{latest ? `${scanCount(latest, s.key)} at last scan` : ''}</span>
-          </button>
-        ))}
-      </section>
-
-      <section className="grid">
-        <div className="card">
-          <h2>Trend</h2>
-          <Trend scans={realScans} />
-        </div>
-        <div className="card">
-          <h2>Policy periods</h2>
-          {latest ? (
-            <dl className="periods">
-              <dt>Inactive after</dt><dd>{latest.rev_inactivedays} days</dd>
-              <dt>Quarantine warning</dt><dd>{latest.rev_quarantinewarningdays} days</dd>
-              <dt>Quarantined for</dt><dd>{latest.rev_quarantineddays} days</dd>
-              <dt>Delete warning</dt><dd>{latest.rev_deletewarningdays} days</dd>
-            </dl>
-          ) : <p className="muted">No scan recorded.</p>}
-        </div>
-        <div className="card">
-          <h2>Recent stage changes</h2>
-          {snapshot.events.length === 0 ? <p className="muted">None recorded.</p> : (
-            <ul className="events">
-              {snapshot.events.slice(0, 6).map((e) => (
-                <li key={e.rev_asseteventid}><span>{e.rev_name}</span><span className="muted">{fmtDateTime(e.rev_eventon)}</span></li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="toolbar">
-          <h2>Assets <span className="muted">({rows.length})</span></h2>
-          <input type="search" placeholder="Search name, owner, environment" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search assets" />
-          <select value={type} onChange={(e) => setType(e.target.value as typeof type)} aria-label="Asset type">
-            <option value="All">Apps and flows</option><option value="App">Apps</option><option value="Flow">Flows</option>
-          </select>
-          <select value={stage} onChange={(e) => setStage(e.target.value as StageFilter)} aria-label="Stage">
-            <option value="Flagged">Flagged</option><option value="All">All stages</option>
-            {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-        </div>
-        {rows.length === 0 ? <p className="muted empty">No assets match.</p> : (
-          <div className="scroll">
-            <table>
-              <thead><tr><th>Name</th><th>Type</th><th>Environment</th><th>Owner</th><th>Last activity</th><th className="r">Days inactive</th><th>Stage</th><th>Next step</th></tr></thead>
-              <tbody>
-                {rows.map((a) => (
-                  <tr key={a.rev_governedassetid} onClick={() => setSelected(a)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && setSelected(a)}>
-                    <td className="name">{a.rev_name}</td>
-                    <td>{typeOf(a)}</td>
-                    <td>{a.rev_environmentname}</td>
-                    <td>{a.rev_ownername || a.rev_ownerupn || '—'}</td>
-                    <td>{fmtDate(a.rev_lastactivityon)}</td>
-                    <td className="r">{a.rev_daysinactive != null ? Math.floor(a.rev_daysinactive) : '—'}</td>
-                    <td><StagePill stage={stageOf(a.rev_stage)} /></td>
-                    <td>{a.rev_nextstage ? `${a.rev_nextstage.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} on ${fmtDate(a.rev_nextstageon)}` : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {!snapshot && !error && (
+          <div className="grid gap-5">
+            <Skeleton className="h-64 rounded-xl" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-6">{STAGES.map((s) => <Skeleton key={s.key} className="h-24 rounded-xl" />)}</div>
+            <Skeleton className="h-80 rounded-xl" />
           </div>
         )}
-        <p className="muted foot">Apps are judged on last modification only; app launches are not yet part of the signal.</p>
-      </section>
 
-      {selected && <><div className="scrim" onClick={() => setSelected(null)} /><Detail asset={selected} snapshot={snapshot} onClose={() => setSelected(null)} /></>}
-    </main>
+        {snapshot && (
+          <>
+            {latest?.rev_istest && (
+              <p className="rounded-lg border px-3 py-2 text-sm" style={{ color: STAGE_COLOR.QuarantineWarning, borderColor: STAGE_COLOR.QuarantineWarning }}>
+                The latest scan was a test run with overridden periods or date, so the stages below are simulated.
+              </p>
+            )}
+
+            <motion.section {...rise(1)} className="grid gap-5 lg:grid-cols-[18rem_1fr]">
+              <Card className={glass}>
+                <CardHeader>
+                  <CardTitle>Fleet health</CardTitle>
+                  <CardDescription>Active or exempt, of everything tracked</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <HealthGauge healthy={healthy} total={total} />
+                  <div className="grid grid-cols-2 gap-2 text-center text-sm">
+                    <div className="rounded-lg bg-muted/40 p-2"><div className="text-xl font-semibold"><CountUp value={total} /></div><div className="text-xs text-muted-foreground">tracked</div></div>
+                    <div className="rounded-lg bg-muted/40 p-2"><div className="text-xl font-semibold" style={{ color: flagged ? STAGE_COLOR.Quarantine : undefined }}><CountUp value={flagged} /></div><div className="text-xs text-muted-foreground">flagged</div></div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className={glass}>
+                <CardHeader>
+                  <CardTitle>Lifecycle track</CardTitle>
+                  <CardDescription>Every asset by days inactive. It drifts right as it ages and changes stage at each line. Select a dot for detail.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {total === 0 ? <p className="grid h-64 place-content-center text-sm text-muted-foreground">No assets tracked yet. Run the scan with a Dataverse URL.</p>
+                    : <Conveyor assets={assets} periods={periods} onSelect={setSelected} />}
+                </CardContent>
+              </Card>
+            </motion.section>
+
+            <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6" aria-label="Assets by stage">
+              {STAGES.map((s, i) => {
+                const on = stage === s.key
+                const color = STAGE_COLOR[s.key]
+                return (
+                  <motion.button key={s.key} type="button" {...rise(2 + i * 0.5)} whileHover={{ y: -4 }} whileTap={{ scale: 0.97 }}
+                    onClick={() => setStage(on ? 'Flagged' : s.key)} aria-pressed={on}
+                    className={cn('glass relative overflow-hidden rounded-xl border bg-card p-4 text-left outline-offset-2 focus-visible:outline-2', on ? 'border-transparent' : 'border-white/10')}
+                    style={on ? { boxShadow: `0 0 0 1.5px ${color}, 0 12px 40px -12px ${color}` } : undefined}>
+                    <span className="absolute -top-8 -right-8 size-24 rounded-full opacity-25 blur-2xl" style={{ background: color }} />
+                    <div className="text-3xl font-semibold tracking-tight" style={{ color }}><CountUp value={counts[s.key]} /></div>
+                    <div className="mt-1 text-sm font-medium">{s.label}</div>
+                    <div className="text-xs text-muted-foreground">{s.verb}</div>
+                  </motion.button>
+                )
+              })}
+            </section>
+
+            <motion.section {...rise(5)} className="grid gap-5 lg:grid-cols-3">
+              <Card className={cn(glass, 'lg:col-span-2')}>
+                <CardHeader>
+                  <CardTitle>Trend</CardTitle>
+                  <CardDescription>Tracked and flagged assets at each scan</CardDescription>
+                </CardHeader>
+                <CardContent><TrendChart scans={snapshot.scans.filter((s) => !s.rev_istest)} /></CardContent>
+              </Card>
+
+              <Card className={glass}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><CalendarClock className="size-4" /> Up next</CardTitle>
+                  <CardDescription>The next stage changes the policy would make</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {upNext.length === 0 ? <p className="text-sm text-muted-foreground">Nothing scheduled.</p> : (
+                    <ul className="grid gap-1">
+                      {upNext.map(({ a, days }) => (
+                        <li key={a.rev_governedassetid}>
+                          <button type="button" onClick={() => setSelected(a)} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted/50 focus-visible:outline-2">
+                            <span className="grid w-12 shrink-0 text-center leading-tight"><span className="text-lg font-semibold tabular-nums">{days}</span><span className="text-[10px] text-muted-foreground">{days === 1 ? 'day' : 'days'}</span></span>
+                            <span className="min-w-0 flex-1"><span className="block truncate font-medium">{a.rev_name}</span><span className="flex items-center gap-1 text-xs text-muted-foreground"><ArrowRight className="size-3" />{spaced(a.rev_nextstage).toLowerCase()} on {fmtDate(a.rev_nextstageon)}</span></span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.section>
+
+            <motion.section {...rise(6)}>
+              <Card className={glass}>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <CardTitle className="mr-auto">Assets <span className="font-normal text-muted-foreground">({rows.length})</span></CardTitle>
+                    <div className="relative w-full sm:w-64">
+                      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input type="search" placeholder="Search name, owner, environment" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-8" aria-label="Search assets" />
+                    </div>
+                    <ToggleGroup type="single" variant="outline" value={type} onValueChange={(v) => v && setType(v as typeof type)} aria-label="Asset type">
+                      <ToggleGroupItem value="All">All</ToggleGroupItem>
+                      <ToggleGroupItem value="App"><AppWindow /> Apps</ToggleGroupItem>
+                      <ToggleGroupItem value="Flow"><Workflow /> Flows</ToggleGroupItem>
+                    </ToggleGroup>
+                    <ToggleGroup type="single" variant="outline" value={stage === 'Flagged' || stage === 'All' ? stage : ''} onValueChange={(v) => v && setStage(v as StageFilter)} aria-label="Stage scope">
+                      <ToggleGroupItem value="Flagged">Flagged</ToggleGroupItem>
+                      <ToggleGroupItem value="All">Everything</ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {rows.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">No assets match.</p> : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead><TableHead>Environment</TableHead><TableHead>Owner</TableHead><TableHead>Last activity</TableHead>
+                          <TableHead className="w-44">Days inactive</TableHead><TableHead>Stage</TableHead><TableHead>Next step</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rows.map((a) => {
+                          const k = stageOf(a.rev_stage)
+                          const days = a.rev_daysinactive ?? 0
+                          const deleteAt = periods.inactive + periods.warnQ + periods.quarantined + periods.warnD
+                          return (
+                            <TableRow key={a.rev_governedassetid} tabIndex={0} className="cursor-pointer" onClick={() => setSelected(a)} onKeyDown={(e) => e.key === 'Enter' && setSelected(a)}>
+                              <TableCell className="font-medium">
+                                <span className="flex items-center gap-2">
+                                  {typeOf(a) === 'Flow' ? <Workflow className="size-4 shrink-0 text-muted-foreground" aria-label="Flow" /> : <AppWindow className="size-4 shrink-0 text-muted-foreground" aria-label="App" />}
+                                  {a.rev_name}
+                                </span>
+                              </TableCell>
+                              <TableCell>{a.rev_environmentname}</TableCell>
+                              <TableCell>{a.rev_ownername || a.rev_ownerupn || '—'}</TableCell>
+                              <TableCell>{fmtDate(a.rev_lastactivityon)}</TableCell>
+                              <TableCell>
+                                <span className="flex items-center gap-2">
+                                  <span className="w-8 text-right tabular-nums">{Math.floor(days)}</span>
+                                  <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                                    <motion.span className="block h-full rounded-full" style={{ background: STAGE_COLOR[k ?? 'New'] }}
+                                      initial={{ width: 0 }} animate={{ width: `${Math.min(100, (days / deleteAt) * 100)}%` }} transition={{ duration: 0.9, ease: 'easeOut' }} />
+                                  </span>
+                                </span>
+                              </TableCell>
+                              <TableCell><StagePill stage={k} /></TableCell>
+                              <TableCell className="text-muted-foreground">{a.rev_nextstage ? `${spaced(a.rev_nextstage).toLowerCase()} on ${fmtDate(a.rev_nextstageon)}` : '—'}</TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                  <p className="mt-3 text-xs text-muted-foreground">Apps are judged on last modification only; app launches are not yet part of the signal.</p>
+                </CardContent>
+              </Card>
+            </motion.section>
+          </>
+        )}
+      </main>
+      <AssetSheet asset={selected} events={snapshot?.events ?? []} onClose={() => setSelected(null)} />
+    </TooltipProvider>
   )
 }
