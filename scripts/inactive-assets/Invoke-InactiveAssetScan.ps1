@@ -13,6 +13,10 @@ Signals used for "last activity":
          UsageSignal = unavailable.
   flows  lastModifiedTime plus the most recent run from run history (the platform keeps about 28 days).
 
+With -DataverseUrl the scan is also logged to Dataverse: each asset's current state is upserted, the run is
+recorded with its counts, and every change of stage becomes an event. The last run seen for a flow is kept there,
+so a run that has aged out of the platform's run history still counts.
+
 Authentication uses the current Azure CLI session (`az login` locally, azure/login OIDC in GitHub Actions).
 
 .EXAMPLE
@@ -30,7 +34,10 @@ param(
     [Nullable[double]] $QuarantineWarningDays,
     [Nullable[double]] $QuarantinedDays,
     [Nullable[double]] $DeleteWarningDays,
-    [Nullable[datetime]] $AsOf
+    [Nullable[datetime]] $AsOf,
+    # Log the scan to Dataverse (schema from Deploy-InactiveAssetSchema.ps1). Omit to only write report files.
+    [string] $DataverseUrl = $env:INACTIVE_ASSETS_DATAVERSE_URL,
+    [string] $PublisherPrefix = 'rev'
 )
 
 Set-StrictMode -Version Latest
@@ -119,6 +126,18 @@ function Resolve-User([string] $ObjectId) {
         catch { $script:Users[$ObjectId] = $null }
     }
     return $script:Users[$ObjectId]
+}
+
+# ---------- previous state (Dataverse) ----------
+$px = $PublisherPrefix
+$known = @{}
+if ($DataverseUrl) {
+    Import-Module (Join-Path $PSScriptRoot 'Dataverse.psm1') -Force
+    Connect-Dataverse $DataverseUrl
+    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_stage,${px}_lastrunon,statecode")) {
+        $known[[string]$row."${px}_assetid"] = $row
+    }
+    Write-Host "Dataverse: $($known.Count) asset(s) already tracked"
 }
 
 # ---------- evaluation ----------
@@ -222,6 +241,11 @@ foreach ($environment in $envs) {
                     $warnings.Add("Run history unavailable for flow '$($p.displayName)' ($($f.name)): $($_.Exception.Message)")
                 }
             }
+            # Run history only reaches back about 28 days; keep the latest run ever seen for this flow.
+            if ($known.ContainsKey($f.name)) {
+                $storedRun = ConvertTo-UtcDate (Get-Prop $known[$f.name] "${px}_lastrunon")
+                if ($null -ne $storedRun -and ($null -eq $lastRun -or $storedRun -gt $lastRun)) { $lastRun = $storedRun }
+            }
             $creatorId = Get-Prop (Get-Prop $p 'creator') 'objectId'
             $user = Resolve-User $creatorId
             Add-Record @{
@@ -293,6 +317,109 @@ if ($warnings.Count -gt 0) {
 }
 $md | Set-Content -Path (Join-Path $OutputPath 'summary.md') -Encoding utf8
 if ($env:GITHUB_STEP_SUMMARY) { $md | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 }
+
+# ---------- Dataverse log ----------
+if ($DataverseUrl) {
+    function Iso($d) { if ($null -eq $d) { return $null } return ([datetime]$d).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+
+    # Choice values by label with spaces removed, e.g. 'QuarantineWarning' -> 910270001.
+    $stageValue = @{}; $stageName = @{}
+    foreach ($o in (Invoke-Dv GET "GlobalOptionSetDefinitions(Name='${px}_assetlifecyclestage')").Options) {
+        $label = ([string]$o.Label.UserLocalizedLabel.Label).Replace(' ', '')
+        $stageValue[$label] = [int]$o.Value; $stageName[[int]$o.Value] = $label
+    }
+    $typeValue = @{}
+    foreach ($o in (Invoke-Dv GET "GlobalOptionSetDefinitions(Name='${px}_assettype')").Options) { $typeValue[([string]$o.Label.UserLocalizedLabel.Label).ToLower()] = [int]$o.Value }
+
+    $isTest = ($null -ne $AsOf) -or ($null -ne $InactiveDays) -or ($null -ne $QuarantineWarningDays) -or ($null -ne $QuarantinedDays) -or ($null -ne $DeleteWarningDays)
+    $runUrl = $null
+    if ($env:GITHUB_RUN_ID) { $runUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
+    $scanId = Invoke-Dv POST "${px}_assetscans" @{
+        "${px}_name"                   = "Scan $($scanTime.ToString('yyyy-MM-dd HH:mm'))Z"
+        "${px}_scanon"                 = (Iso $scanTime)
+        "${px}_evaluatedasof"          = (Iso $now)
+        "${px}_mode"                   = 'report'
+        "${px}_istest"                 = $isTest
+        "${px}_inactivedays"           = $periods.inactiveDays
+        "${px}_quarantinewarningdays"  = $periods.quarantineWarningDays
+        "${px}_quarantineddays"        = $periods.quarantinedDays
+        "${px}_deletewarningdays"      = $periods.deleteWarningDays
+        "${px}_totalcount"             = $sorted.Count
+        "${px}_activecount"            = $report.counts['Active']
+        "${px}_quarantinewarningcount" = $report.counts['QuarantineWarning']
+        "${px}_quarantinecount"        = $report.counts['Quarantine']
+        "${px}_deletewarningcount"     = $report.counts['DeleteWarning']
+        "${px}_deletecount"            = $report.counts['Delete']
+        "${px}_exemptcount"            = $report.counts['Exempt']
+        "${px}_runurl"                 = $runUrl
+    } -ReturnId
+
+    $events = 0
+    foreach ($r in $sorted) {
+        $isNew = -not $known.ContainsKey($r.AssetId)
+        $row = @{
+            "${px}_name"                = ([string]$r.DisplayName)
+            "${px}_assettype"           = $typeValue[$r.AssetType]
+            "${px}_subtype"             = $r.AssetSubtype
+            "${px}_environmentid"       = $r.EnvironmentId
+            "${px}_environmentname"     = $r.EnvironmentName
+            "${px}_ownerobjectid"       = $r.OwnerId
+            "${px}_ownerupn"            = $r.OwnerUpn
+            "${px}_ownername"           = $r.OwnerName
+            "${px}_platformstate"       = $r.PlatformState
+            "${px}_assetcreatedon"      = (Iso $r.CreatedTime)
+            "${px}_lastmodifiedon"      = (Iso $r.LastModifiedTime)
+            "${px}_lastrunon"           = (Iso $r.LastRunTime)
+            "${px}_lastactivityon"      = (Iso $r.LastActivityTime)
+            "${px}_lastactivitysource"  = $r.LastActivitySource
+            "${px}_usagesignal"         = $r.UsageSignal
+            "${px}_daysinactive"        = [math]::Min([double]$r.DaysInactive, 1000000)
+            "${px}_stage"               = $stageValue[$r.Stage]
+            "${px}_nextstage"           = $r.NextStage
+            "${px}_nextstageon"         = (Iso $r.NextStageOn)
+            "${px}_quarantinewarningon" = (Iso $r.QuarantineWarningOn)
+            "${px}_quarantineon"        = (Iso $r.QuarantineOn)
+            "${px}_deletewarningon"     = (Iso $r.DeleteWarningOn)
+            "${px}_deleteon"            = (Iso $r.DeleteOn)
+            "${px}_exemptreason"        = $r.ExemptReason
+            "${px}_lastscanon"          = (Iso $scanTime)
+            statecode                   = 0
+            statuscode                  = 1
+        }
+        if ($isNew) { $row["${px}_firstseenon"] = (Iso $scanTime) }
+        Invoke-Dv PATCH "${px}_governedassets(${px}_assetid='$($r.AssetId)')" $row | Out-Null
+
+        # An event for every change of stage. A newly seen asset that is simply active is not news.
+        $from = $null
+        if (-not $isNew) { $from = Get-Prop $known[$r.AssetId] "${px}_stage" }
+        $to = $stageValue[$r.Stage]
+        if (($isNew -and $r.Stage -ne 'Active') -or (-not $isNew -and $from -ne $to)) {
+            $fromLabel = 'New'; if ($null -ne $from) { $fromLabel = $stageName[[int]$from] }
+            Invoke-Dv POST "${px}_assetevents" @{
+                "${px}_name"             = "$($r.DisplayName): $fromLabel to $($r.Stage)"
+                "${px}_eventon"          = (Iso $now)
+                "${px}_fromstage"        = $from
+                "${px}_tostage"          = $to
+                "${px}_daysinactive"     = [math]::Min([double]$r.DaysInactive, 1000000)
+                "${px}_asset@odata.bind" = "/${px}_governedassets(${px}_assetid='$($r.AssetId)')"
+                "${px}_scan@odata.bind"  = "/${px}_assetscans($scanId)"
+            } | Out-Null
+            $events++
+        }
+    }
+
+    # Assets in the scanned scope that no longer exist in the tenant are deactivated, not deleted: history stays.
+    $seen = @{}; foreach ($r in $sorted) { $seen[$r.AssetId] = $true }
+    $scannedEnvs = @($envs | ForEach-Object { $_.name })
+    $gone = 0
+    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_environmentid&`$filter=statecode eq 0")) {
+        if ($seen.ContainsKey([string]$row."${px}_assetid")) { continue }
+        if ($scannedEnvs -notcontains [string]$row."${px}_environmentid") { continue }
+        Invoke-Dv PATCH "${px}_governedassets($($row."${px}_governedassetid"))" @{ statecode = 1; statuscode = 2 } | Out-Null
+        $gone++
+    }
+    Write-Host "Dataverse: scan $scanId logged, $($sorted.Count) asset(s) upserted, $events event(s), $gone no longer present"
+}
 
 Write-Host ''
 foreach ($st in $stageOrder) { Write-Host ("{0,-18} {1}" -f $st, $report.counts[$st]) }

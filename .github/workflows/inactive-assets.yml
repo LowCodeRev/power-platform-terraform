@@ -79,6 +79,30 @@ jobs:
           if ($env:AS_OF) { $params.AsOf = [datetime]$env:AS_OF }
           ./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 @params
 
+      # TEMP: the service principal sees 0 flows where an admin user sees 4. Find out which endpoint it can read.
+      - name: Probe flow visibility (temporary diagnostic)
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          E=50b383ee-e3db-ed10-983d-376a576cd404
+          D=https://lowcoderev.crm.dynamics.com
+          tok() { az account get-access-token --resource "$1" --query accessToken -o tsv 2>/dev/null; }
+          probe() { # name, token, url
+            out=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $2" -H "Accept: application/json" "$3")
+            code=$(echo "$out" | tail -1); body=$(echo "$out" | sed '$d')
+            count=$(echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('value', [])))" 2>/dev/null)
+            echo "$1 -> http $code, items ${count:-n/a}"
+            [ "$code" != "200" ] && echo "   $(echo "$body" | cut -c1-300)"
+          }
+          FLOW=$(tok https://service.flow.microsoft.com/); PP=$(tok https://api.powerplatform.com/); DV=$(tok $D)
+          probe "flow admin v2"      "$FLOW" "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$E/v2/flows?api-version=2016-11-01"
+          probe "flow admin v1"      "$FLOW" "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$E/flows?api-version=2016-11-01"
+          probe "flow maker scope"   "$FLOW" "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/environments/$E/flows?api-version=2016-11-01"
+          probe "pp api cloudFlows"  "$PP"   "https://api.powerplatform.com/powerautomate/environments/$E/cloudFlows?api-version=2022-03-01-preview"
+          probe "dataverse WhoAmI"   "$DV"   "$D/api/data/v9.2/WhoAmI"
+          probe "dataverse workflows" "$DV"  "$D/api/data/v9.2/workflows?\$select=name,modifiedon,statecode&\$filter=category%20eq%205"
+
       - uses: actions/upload-artifact@v4
         with:
           name: inactive-assets-report
