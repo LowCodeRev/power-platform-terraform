@@ -1,0 +1,17 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8; --card: #ffffff; --text: #1b1f27; --muted: #626b7a; --line: #dfe3ea; --accent: #2f5bd6;
+  --active: #2f8f5b; --qwarn: #b7791f; --quar: #c2570c; --dwarn: #c53030; --del: #7b1d1d; --exempt: #3b6cb5;
+  font-family: system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 14px; line-height: 1.45;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --card: #1b2029; --text: #e7eaf0; --muted: #98a2b3; --line: #2b3240; --accent: #7fa2ff;
+    --active: #58c08a; --qwarn: #e0a84a; --quar: #f08a45; --dwarn: #f27171; --del: #ff9b9b; --exempt: #7fb0f0;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+h1, h2, h3, p { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
