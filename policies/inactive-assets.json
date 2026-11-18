@@ -1,0 +1,16 @@
+{
+  "mode": "report",
+  "periods": {
+    "inactiveDays": 90,
+    "quarantineWarningDays": 14,
+    "quarantinedDays": 90,
+    "deleteWarningDays": 14
+  },
+  "assetTypes": ["app", "flow"],
+  "excludeManaged": true,
+  "environments": {
+    "include": [],
+    "exclude": []
+  },
+  "exemptions": []
+}

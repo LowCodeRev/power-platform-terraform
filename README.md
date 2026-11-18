@@ -13,6 +13,7 @@ See `PLAN.md` for the research, phased plan, and tenant inventory.
 | `environments/` | Azure Storage `environments.tfstate` | CI (OIDC) or you | Environment lifecycle and managed environment settings |
 | `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection, nightly PDE adoption, PDE decommission |
 | `modules/pde/` | | | One personal developer environment per record; adopted from environment routing nightly. See [docs/pde-process.md](docs/pde-process.md) |
+| `policies/`, `scripts/inactive-assets/` | none | CI (OIDC) or you | Inactive asset policy scan, report only. See below |
 
 ## Local runs
 
@@ -89,3 +90,38 @@ Repository: `LowCodeRev/power-platform-terraform`. The federated credentials on 
 yourself as a required reviewer before the first apply run, and protect `main` so the `plan` check must pass.
 
 First PR: exercises the plan workflow and the service principal OIDC path.
+
+## Inactive asset policy (report only)
+
+`scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` lists every app and cloud flow and reports where each one
+sits on the lifecycle timeline. It changes nothing in the tenant. The `inactive-assets` workflow runs it daily and
+publishes the result as the run summary and an artifact (JSON, CSV, Markdown).
+
+Timeline, in days since the last modification or run, from `policies/inactive-assets.json`:
+
+| Stage | Starts at (defaults) |
+|---|---|
+| Quarantine warning | 90 (`inactiveDays`) |
+| Quarantine | 104 (+ `quarantineWarningDays` 14) |
+| Delete warning | 194 (+ `quarantinedDays` 90) |
+| Delete | 208 (+ `deleteWarningDays` 14) |
+
+Testing without waiting: override any period for one run, or move "today".
+
+```powershell
+az login --allow-no-subscriptions --tenant lowcoderev.ai
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -InactiveDays 1 -QuarantineWarningDays 1 -QuarantinedDays 1 -DeleteWarningDays 1
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -AsOf 2027-06-01
+```
+
+The same overrides are inputs on the workflow's manual run. Exempt an asset by adding
+`{ "assetId": "<id>", "reason": "...", "expires": "2027-01-31" }` to `exemptions` (`expires` is optional).
+
+Known limits:
+
+- Apps are judged on last modification only. The admin API carries no launch data; that needs the Purview audit
+  log. Until then an app that is used but not edited shows as inactive.
+- Flow run history is kept by the platform for about 28 days, so a flow's last run older than that is invisible.
+- Flows from managed solutions are skipped (`excludeManaged`). Model-driven apps are not scanned.
+- The report is a projection from last activity. Enforcement must count each warning period from the date the
+  owner was actually notified.
