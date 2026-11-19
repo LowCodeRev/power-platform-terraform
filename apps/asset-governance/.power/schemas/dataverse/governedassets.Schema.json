@@ -314,6 +314,13 @@
           "x-ms-schema-name": "rev_lastactivitysource",
           "maxLength": 100
         },
+        "rev_lastlaunchon": {
+          "type": "string",
+          "title": "Last Launch On",
+          "x-ms-dataverse-attribute": "rev_lastlaunchon",
+          "x-ms-dataverse-type": "DateTimeType",
+          "x-ms-schema-name": "rev_lastlaunchon"
+        },
         "rev_lastmodifiedon": {
           "type": "string",
           "title": "Last Modified On",
@@ -503,7 +510,23 @@
           "title": "Status Reason",
           "x-ms-dataverse-attribute": "statuscode",
           "x-ms-dataverse-type": "StatusType",
-          "x-ms-schema-name": "statuscode"
+          "x-ms-schema-name": "statuscode",
+          "enum": [
+            "Active",
+            "Inactive"
+          ],
+          "x-ms-enum-values": [
+            1,
+            2
+          ],
+          "Color": [
+            null,
+            null
+          ],
+          "x-ms-optionsetmetadataid": "b18b0ca4-e09e-4bc7-96a8-17d07caa6240",
+          "x-ms-isGlobal": false,
+          "x-ms-optionsetdisplayname": "Status Reason",
+          "x-ms-optionSetType": "Status"
         },
         "statuscodename": {
           "type": "string",

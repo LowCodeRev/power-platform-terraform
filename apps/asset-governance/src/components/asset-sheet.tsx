@@ -47,7 +47,9 @@ export function AssetSheet({ asset, events, onClose }: { asset: Asset | null; ev
                 <Field label="Days inactive">{asset.rev_daysinactive ?? '—'}</Field>
                 <Field label="Last activity from">{asset.rev_lastactivitysource ?? '—'}</Field>
                 <Field label="Last modified">{fmtDate(asset.rev_lastmodifiedon)}</Field>
-                <Field label="Last run">{fmtDate(asset.rev_lastrunon)}</Field>
+                {typeOf(asset) === 'Flow'
+                  ? <Field label="Last run">{fmtDate(asset.rev_lastrunon)}</Field>
+                  : <Field label="Last launch">{asset.rev_lastlaunchon ? fmtDate(asset.rev_lastlaunchon) : asset.rev_usagesignal === 'audit-log' ? 'None in the audit log' : 'Not read'}</Field>}
                 <Field label="Usage signal">{asset.rev_usagesignal ?? '—'}</Field>
                 {asset.rev_platformstate && <Field label="Platform state">{asset.rev_platformstate}</Field>}
                 {asset.rev_exemptreason && <Field label="Exempt reason">{asset.rev_exemptreason}</Field>}

@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "appId": "83a74569-574c-4135-8056-52abf7b1d1f6",
-  "appDisplayName": "Asset Governance",
+  "appDisplayName": "Power Platform Governance Dashboard",
   "region": "prod",
   "appType": "CodeApp",
   "environmentId": "50b383ee-e3db-ed10-983d-376a576cd404",

@@ -21,6 +21,11 @@ export const Rev_governedassetsstatecode = {
   1: 'Inactive'
 } as const;
 export type Rev_governedassetsstatecode = keyof typeof Rev_governedassetsstatecode;
+export const Rev_governedassetsstatuscode = {
+  1: 'Active',
+  2: 'Inactive'
+} as const;
+export type Rev_governedassetsstatuscode = keyof typeof Rev_governedassetsstatuscode;
 
 export interface Rev_governedassetsBase {
   importsequencenumber?: number;
@@ -38,6 +43,7 @@ export interface Rev_governedassetsBase {
   rev_governedassetid: string;
   rev_lastactivityon?: string;
   rev_lastactivitysource?: string;
+  rev_lastlaunchon?: string;
   rev_lastmodifiedon?: string;
   rev_lastrunon?: string;
   rev_lastscanon?: string;
@@ -54,7 +60,7 @@ export interface Rev_governedassetsBase {
   rev_subtype?: string;
   rev_usagesignal?: string;
   statecode: Rev_governedassetsstatecode;
-  statuscode?: string;
+  statuscode?: Rev_governedassetsstatuscode;
   timezoneruleversionnumber?: number;
   utcconversiontimezonecode?: number;
 }

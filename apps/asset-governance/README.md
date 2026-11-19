@@ -1,4 +1,4 @@
-# Asset Governance dashboard
+# Power Platform Governance Dashboard
 
 Power Apps code app (React + Vite) over the inactive asset policy log in Dataverse: `rev_governedasset`,
 `rev_assetscan` and `rev_assetevent`, written by `scripts/inactive-assets/Invoke-InactiveAssetScan.ps1`.
