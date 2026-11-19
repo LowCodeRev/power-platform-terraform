@@ -1,7 +1,7 @@
 # Handoff: inactive asset policy and governance dashboard
 
-Written 2026-11-18. Branch `feature/inactive-assets` (draft PR #7, base `feature/pde-requests`). Last commit is
-`81e703f`; **everything described under "Uncommitted" is in the working tree only**.
+Written 2026-11-18. Branch `feature/inactive-assets` (draft PR #7, base `feature/pde-requests`). All work is committed and pushed
+except later edits to this file.
 
 ## Ground rules from the user
 
@@ -16,12 +16,12 @@ Written 2026-11-18. Branch `feature/inactive-assets` (draft PR #7, base `feature
 
 | Piece | Where | State |
 |---|---|---|
-| Policy | `policies/inactive-assets.json` | 90 / 14 / 90 / 14 days, `appLaunchSignal` added (uncommitted) |
-| Scan | `scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` | Apps + flows, launch signal added (uncommitted) |
+| Policy | `policies/inactive-assets.json` | 90 / 14 / 90 / 14 days, `appLaunchSignal` added |
+| Scan | `scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` | Apps + flows, launch signal added |
 | Logic + tests | `InactiveAssets.psm1`, `tests/` | 20 Pester tests pass locally |
 | Dataverse schema | `Deploy-InactiveAssetSchema.ps1` | Deployed to https://lowcoderev.crm.dynamics.com, incl. the two new columns |
-| Service principal access | `Grant-InactiveAssetAccess.ps1` (new, uncommitted) | Run and verified in the LowCodeRev environment |
-| Workflow | `.github/workflows/inactive-assets.yml` | Daily 11:30 UTC; Dataverse URL variable wired (uncommitted) |
+| Service principal access | `Grant-InactiveAssetAccess.ps1` (new) | Run and verified in the LowCodeRev environment |
+| Workflow | `.github/workflows/inactive-assets.yml` | Daily 11:30 UTC; Dataverse URL variable wired |
 | Dashboard | `apps/asset-governance` | "Power Platform Governance Dashboard", pushed to Power Apps |
 
 Dashboard URL:
@@ -45,24 +45,36 @@ testable locally except through Dataverse impersonation.
    "Inactive Asset Scan": create/read/write/append on the three log tables, metadata read, read on cloud flows.
    Verified by impersonation: reads and writes the log, denied on `accounts`.
 
+## Results of the first CI runs (2026-11-19)
+
+Commits `4d4c68e`, `3aeda13` and a follow-up fix are pushed. Repository variable
+`INACTIVE_ASSETS_DATAVERSE_URL` is set. Run 44442721304 on PR #7 showed:
+
+- **Dataverse logging as the service principal works.** The scheduled scan now feeds the dashboard.
+- **App launches: blocked. Auditing is turned off in the tenant.** The audit API answers 400 with status
+  `AuditingDisabledTenant`. The permission and the request are accepted; there is simply no audit log. The scan
+  falls back to modification only, as designed.
+- **Flows are still invisible to the service principal** (0 listed; Andy sees 4). The application user did not
+  fix the flow admin API. The first run also retired the flow record a local scan had logged; fixed, an asset is
+  now only marked gone when the listing for its environment and type returned something.
+
 ## Not yet verified
 
-- **The audit query has never run with a permitted identity.** Andy's account gets 403 from the audit API (no
-  Purview audit role, and the az CLI token lacks the scope). First real test is the workflow run after a push.
-- **Launch event shape.** No real `LaunchPowerApp` event from this tenant has been seen. The scan logs event
-  counts by operation; check them in the first CI run. If zero launches come back, check that auditing is turned
-  on in the tenant and that the operation name contains "Launch".
-- **Flow visibility for the service principal.** In CI the flow admin API returned 200 with 0 flows. The
-  hypothesis is that the new application user (with read on workflows) fixes this. Unconfirmed.
-- The dashboard was checked against mock data locally, not inside Power Apps. Light mode was never looked at.
+- The audit query end to end, and the shape of a real launch event. Blocked on auditing being turned on.
+- The dashboard inside Power Apps (checked against mock data only). Light mode was never looked at.
 
 ## Next steps, in order
 
-1. **Ask to commit and push** the working tree. The push triggers the workflow on PR #7.
-2. **Set the repository variable** `INACTIVE_ASSETS_DATAVERSE_URL=https://lowcoderev.crm.dynamics.com`
-   (`gh variable set`), or the CI scan will not write to Dataverse. Not done; ask first.
-3. Read the CI run: launch counts, whether flows now appear, whether the Dataverse log step succeeds as the
-   service principal. Then open the dashboard and check "Last launch" in an app's detail panel.
+1. **Turn on auditing** (the user's call; tenant-wide). Purview portal > Audit > "Start recording user and admin
+   activity", or Exchange Online PowerShell `Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true`.
+   It can take an hour or more to take effect and only records events from then on, so every app will show "no
+   launch" until someone opens it.
+2. After that, launch an app, wait for the event (up to a day), rerun the workflow and read the `audit:` lines
+   in the Scan step. Confirm launches match apps and "Last launch" shows in the dashboard.
+3. **Flow visibility in CI.** Option to try: read cloud flows from the Dataverse `workflow` table (category 5)
+   as the application user, which already has read on it. This needs each environment's Dataverse URL and an
+   application user per environment, and gives no run history, so it is a design decision, not a quick fix.
+   Until then only local scans see flows.
 4. Still unbuilt from the original ask: owner notification from a SendAs mailbox, the "keep this asset" request,
    enforcement (automatic quarantine and delete), and DLP alignment and drift through Terraform.
 
