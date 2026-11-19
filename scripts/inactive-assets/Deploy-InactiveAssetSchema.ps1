@@ -109,6 +109,7 @@ $columns = [ordered]@{
         (Col 'DateTime' 'assetcreatedon' 'Asset Created On')
         (Col 'DateTime' 'lastmodifiedon' 'Last Modified On')
         (Col 'DateTime' 'lastrunon' 'Last Run On')
+        (Col 'DateTime' 'lastlaunchon' 'Last Launch On')
         (Col 'DateTime' 'lastactivityon' 'Last Activity On')
         (Col 'String' 'lastactivitysource' 'Last Activity Source' @{ MaxLength = 100 })
         (Col 'String' 'usagesignal' 'Usage Signal' @{ MaxLength = 100 })
@@ -141,6 +142,7 @@ $columns = [ordered]@{
         (Col 'Integer' 'deletecount' 'Delete')
         (Col 'Integer' 'exemptcount' 'Exempt')
         (Col 'String' 'runurl' 'Run URL' @{ MaxLength = 500; Format = 'Url' })
+        (Col 'DateTime' 'launchesthrough' 'Launches Read Through')
     )
     "${p}_assetevent"    = @(
         (Col 'DateTime' 'eventon' 'Event On')

@@ -119,8 +119,13 @@ The same overrides are inputs on the workflow's manual run. Exempt an asset by a
 
 Known limits:
 
-- Apps are judged on last modification only. The admin API carries no launch data; that needs the Purview audit
-  log. Until then an app that is used but not edited shows as inactive.
+- App launches come from the Purview audit log (Graph `security/auditLog/queries`), which needs
+  `AuditLogsQuery.Read.All` (granted to the service principal in `bootstrap/graph.tf`) and auditing turned on
+  in the tenant. The query is slow and asynchronous; `appLaunchSignal` in the policy sets how far back it looks
+  and how long the scan waits. If it cannot be read the scan still completes and apps fall back to last
+  modification only, so an app that is used but not edited shows as inactive.
+- The audit log is kept for a limited time. With `-DataverseUrl` the last launch seen for each app is stored, so
+  it keeps counting after it ages out; without Dataverse each run only knows what is still in the log.
 - Flow run history is kept by the platform for about 28 days, so a flow's last run older than that is invisible.
 - Flows from managed solutions are skipped (`excludeManaged`). Model-driven apps are not scanned.
 - The report is a projection from last activity. Enforcement must count each warning period from the date the

@@ -8,6 +8,7 @@
   },
   "assetTypes": ["app", "flow"],
   "excludeManaged": true,
+  "appLaunchSignal": { "enabled": true, "lookbackDays": 180, "timeoutMinutes": 30 },
   "environments": {
     "include": [],
     "exclude": []

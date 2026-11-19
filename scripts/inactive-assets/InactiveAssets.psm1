@@ -83,6 +83,28 @@ function Get-LatestActivity {
     return $best
 }
 
+function Get-LatestLaunchByApp {
+    # Latest launch per app from audit log records. The shape of auditData differs between event versions, so an
+    # event is attributed to an app when one of the known app ids appears anywhere in it. Keys are lower-case ids.
+    param([object[]] $Records, [string[]] $AppIds)
+    $wanted = @{}
+    foreach ($id in @($AppIds)) { if ($id) { $wanted[$id.ToLower()] = $true } }
+    $latest = @{}
+    foreach ($r in @($Records)) {
+        if ($null -eq $r) { continue }
+        $when = $null
+        if ($r.PSObject.Properties['createdDateTime']) { $when = ConvertTo-UtcDate $r.createdDateTime }
+        if ($null -eq $when) { continue }
+        $text = ($r | ConvertTo-Json -Depth 20 -Compress).ToLower()
+        foreach ($m in [regex]::Matches($text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')) {
+            $id = $m.Value
+            if (-not $wanted.ContainsKey($id)) { continue }
+            if (-not $latest.ContainsKey($id) -or $when -gt $latest[$id]) { $latest[$id] = $when }
+        }
+    }
+    return $latest
+}
+
 function Get-ActiveExemption {
     # An exemption matches on assetId and applies until its optional "expires" date.
     param($Exemptions, [Parameter(Mandatory)] [string] $AssetId, [Parameter(Mandatory)] [datetime] $AsOf)
@@ -96,4 +118,4 @@ function Get-ActiveExemption {
     return $null
 }
 
-Export-ModuleMember -Function ConvertTo-UtcDate, Get-InactiveAssetStage, Get-LatestActivity, Get-ActiveExemption
+Export-ModuleMember -Function ConvertTo-UtcDate, Get-InactiveAssetStage, Get-LatestActivity, Get-LatestLaunchByApp, Get-ActiveExemption

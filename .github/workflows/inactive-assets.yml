@@ -70,6 +70,9 @@ jobs:
           QUARANTINED_DAYS: ${{ github.event.inputs.quarantined_days }}
           DELETE_WARNING_DAYS: ${{ github.event.inputs.delete_warning_days }}
           AS_OF: ${{ github.event.inputs.as_of }}
+          # Set this repository variable to log scans to Dataverse (the service principal needs
+          # Grant-InactiveAssetAccess.ps1 run in that environment). Unset, the scan only writes the report.
+          INACTIVE_ASSETS_DATAVERSE_URL: ${{ vars.INACTIVE_ASSETS_DATAVERSE_URL }}
         run: |
           $params = @{ OutputPath = 'inactive-assets-report' }
           if ($env:INACTIVE_DAYS) { $params.InactiveDays = [double]$env:INACTIVE_DAYS }

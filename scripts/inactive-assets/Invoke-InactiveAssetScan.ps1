@@ -8,14 +8,15 @@ Policy values come from policies/inactive-assets.json; any period can be overrid
 -AsOf evaluates the policy as if "now" were another date.
 
 Signals used for "last activity":
-  apps   lastModifiedTime from the Power Apps admin API. App launches are NOT available from that API; until a
-         launch signal is wired in (Purview audit log), app results rest on modification only and are marked
-         UsageSignal = unavailable.
+  apps   lastModifiedTime from the Power Apps admin API plus the most recent launch from the Purview audit log
+         (Graph security/auditLog/queries, needs AuditLogsQuery.Read.All). If the audit log cannot be read the
+         scan still completes: app results then rest on modification only and are marked UsageSignal = unavailable.
   flows  lastModifiedTime plus the most recent run from run history (the platform keeps about 28 days).
 
 With -DataverseUrl the scan is also logged to Dataverse: each asset's current state is upserted, the run is
-recorded with its counts, and every change of stage becomes an event. The last run seen for a flow is kept there,
-so a run that has aged out of the platform's run history still counts.
+recorded with its counts, and every change of stage becomes an event. The last run seen for a flow and the last
+launch seen for an app are kept there, so activity that has aged out of the platform's own history still counts,
+and later scans only need to read the audit log since the previous scan.
 
 Authentication uses the current Azure CLI session (`az login` locally, azure/login OIDC in GitHub Actions).
 
@@ -37,6 +38,8 @@ param(
     [Nullable[datetime]] $AsOf,
     # Log the scan to Dataverse (schema from Deploy-InactiveAssetSchema.ps1). Omit to only write report files.
     [string] $DataverseUrl = $env:INACTIVE_ASSETS_DATAVERSE_URL,
+    # Do not query the audit log for app launches on this run.
+    [switch] $SkipLaunchSignal,
     [string] $PublisherPrefix = 'rev'
 )
 
@@ -68,6 +71,12 @@ $include = @($policy.environments.include)
 $excludeManaged = $true
 if ($policy.PSObject.Properties['excludeManaged']) { $excludeManaged = [bool]$policy.excludeManaged }
 $skippedManaged = 0
+$launchCfg = [pscustomobject]@{ enabled = $true; lookbackDays = 180.0; timeoutMinutes = 30.0 }
+if ($policy.PSObject.Properties['appLaunchSignal']) {
+    foreach ($n in 'enabled', 'lookbackDays', 'timeoutMinutes') {
+        if ($policy.appLaunchSignal.PSObject.Properties[$n]) { $launchCfg.$n = $policy.appLaunchSignal.$n }
+    }
+}
 $exclude = @($policy.environments.exclude)
 
 # ---------- HTTP ----------
@@ -81,10 +90,15 @@ function Get-Token([string] $Resource) {
     return $script:Tokens[$Resource]
 }
 
-function Invoke-Api([string] $Uri, [string] $Resource) {
+function Invoke-Api([string] $Uri, [string] $Resource, [string] $Method = 'Get', $Body = $null) {
     for ($attempt = 1; ; $attempt++) {
         try {
-            return Invoke-RestMethod -Method Get -Uri $Uri -Headers @{ Authorization = "Bearer $(Get-Token $Resource)" }
+            $req = @{ Method = $Method; Uri = $Uri; Headers = @{ Authorization = "Bearer $(Get-Token $Resource)" } }
+            if ($null -ne $Body) {
+                $req.ContentType = 'application/json'
+                $req.Body = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8))
+            }
+            return Invoke-RestMethod @req
         }
         catch {
             $status = 0
@@ -101,7 +115,9 @@ function Get-AllPages([string] $Uri, [string] $Resource) {
         $page = Invoke-Api $Uri $Resource
         foreach ($v in @($page.value)) { if ($null -ne $v) { $items.Add($v) } }
         $Uri = $null
-        if ($page.PSObject.Properties['nextLink'] -and $page.nextLink) { $Uri = $page.nextLink }
+        foreach ($n in 'nextLink', '@odata.nextLink') {
+            if ($page.PSObject.Properties[$n] -and $page.$n) { $Uri = $page.$n }
+        }
     }
     return $items
 }
@@ -128,15 +144,40 @@ function Resolve-User([string] $ObjectId) {
     return $script:Users[$ObjectId]
 }
 
+function Get-AppLaunchRecords([datetime] $Start, [datetime] $End, [double] $TimeoutMinutes) {
+    # Audit log searches are asynchronous: create the query, wait for it, then page through its records.
+    # All Power Apps app events are requested and narrowed to launches afterwards.
+    $base = 'https://graph.microsoft.com/v1.0/security/auditLog/queries'
+    $query = Invoke-Api $base $Graph 'Post' @{
+        displayName         = "Inactive asset scan $($End.ToString('yyyy-MM-dd HH:mm'))Z"
+        filterStartDateTime = $Start.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        filterEndDateTime   = $End.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        recordTypeFilters   = @('powerAppsApp')
+    }
+    $deadline = [datetime]::UtcNow.AddMinutes($TimeoutMinutes)
+    $status = [string]$query.status
+    while ($status -notin 'succeeded', 'failed', 'cancelled') {
+        if ([datetime]::UtcNow -gt $deadline) { throw "audit log query $($query.id) was still '$status' after $TimeoutMinutes minute(s)" }
+        Start-Sleep -Seconds 20
+        $status = [string](Invoke-Api "$base/$($query.id)" $Graph).status
+    }
+    if ($status -ne 'succeeded') { throw "audit log query $($query.id) ended as '$status'" }
+    return @(Get-AllPages "$base/$($query.id)/records?`$top=1000" $Graph)
+}
+
 # ---------- previous state (Dataverse) ----------
 $px = $PublisherPrefix
 $known = @{}
+$launchesThrough = $null
 if ($DataverseUrl) {
     Import-Module (Join-Path $PSScriptRoot 'Dataverse.psm1') -Force
     Connect-Dataverse $DataverseUrl
-    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_stage,${px}_lastrunon,statecode")) {
+    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_stage,${px}_lastrunon,${px}_lastlaunchon,statecode")) {
         $known[[string]$row."${px}_assetid"] = $row
     }
+    # The end of the audit window the last successful scan read. Launches before it are already stored per app.
+    $prior = @(Get-DvAll "${px}_assetscans?`$select=${px}_launchesthrough&`$filter=${px}_launchesthrough ne null&`$orderby=${px}_launchesthrough desc&`$top=1")
+    if ($prior.Count -gt 0) { $launchesThrough = ConvertTo-UtcDate $prior[0]."${px}_launchesthrough" }
     Write-Host "Dataverse: $($known.Count) asset(s) already tracked"
 }
 
@@ -169,6 +210,7 @@ function Add-Record($Asset) {
             CreatedTime         = $Asset.CreatedTime
             LastModifiedTime    = $Asset.Signals['modified']
             LastRunTime         = $Asset.Signals['run']
+            LastLaunchTime      = $Asset.Signals['launch']
             LastActivityTime    = $latest.When
             LastActivitySource  = $latest.Source
             UsageSignal         = $Asset.UsageSignal
@@ -194,6 +236,7 @@ Write-Host "Scanning $($envs.Count) environment(s), evaluating as of $($now.ToSt
 
 # A flow modified inside the inactivity window is active regardless of runs, so its run history is not fetched.
 $activeCutoff = $now.AddDays(-$periods.inactiveDays)
+$pendingApps = New-Object System.Collections.Generic.List[hashtable]
 
 foreach ($environment in $envs) {
     $envId = $environment.name
@@ -205,14 +248,15 @@ foreach ($environment in $envs) {
         foreach ($a in $apps) {
             $p = $a.properties
             $owner = Get-Prop $p 'owner'
-            Add-Record @{
-                AssetType = 'app'; AssetSubtype = (Get-Prop $a 'appType'); AssetId = $a.name; DisplayName = $p.displayName
-                EnvironmentId = $envId; EnvironmentName = $envName
-                OwnerId = (Get-Prop $owner 'id'); OwnerUpn = (Get-Prop $owner 'userPrincipalName'); OwnerName = (Get-Prop $owner 'displayName')
-                PlatformState = $null; CreatedTime = (ConvertTo-UtcDate (Get-Prop $p 'createdTime'))
-                Signals = @{ modified = (ConvertTo-UtcDate (Get-Prop $p 'lastModifiedTime')); run = $null }
-                UsageSignal = 'unavailable'
-            }
+            # Apps are evaluated after the loop, once launches for the whole tenant have been read.
+            $pendingApps.Add(@{
+                    AssetType = 'app'; AssetSubtype = (Get-Prop $a 'appType'); AssetId = $a.name; DisplayName = $p.displayName
+                    EnvironmentId = $envId; EnvironmentName = $envName
+                    OwnerId = (Get-Prop $owner 'id'); OwnerUpn = (Get-Prop $owner 'userPrincipalName'); OwnerName = (Get-Prop $owner 'displayName')
+                    PlatformState = $null; CreatedTime = (ConvertTo-UtcDate (Get-Prop $p 'createdTime'))
+                    Signals = @{ modified = (ConvertTo-UtcDate (Get-Prop $p 'lastModifiedTime')); run = $null; launch = $null }
+                    UsageSignal = 'unavailable'
+                })
         }
     }
 
@@ -260,6 +304,47 @@ foreach ($environment in $envs) {
     }
 }
 
+# ---------- app launches (audit log) ----------
+$launchNote = 'App results rest on **last modification only**: app launches were not read on this run, so an app that is used daily but not edited shows as inactive.'
+$launchWindowEnd = $null
+if ($pendingApps.Count -gt 0) {
+    $launches = @{}
+    if ($SkipLaunchSignal -or -not $launchCfg.enabled) {
+        Write-Host 'App launches: skipped'
+    }
+    else {
+        # The audit log is read in real time even when -AsOf moves the evaluation date.
+        $windowStart = $scanTime.AddDays(-[double]$launchCfg.lookbackDays)
+        if ($null -ne $launchesThrough -and $launchesThrough.AddDays(-2) -gt $windowStart) { $windowStart = $launchesThrough.AddDays(-2) } # overlap covers late-arriving events
+        try {
+            Write-Host "App launches: querying the audit log from $($windowStart.ToString('u')) (this can take several minutes)"
+            $auditRecords = @(Get-AppLaunchRecords $windowStart $scanTime ([double]$launchCfg.timeoutMinutes))
+            foreach ($g in @($auditRecords | Group-Object operation)) { Write-Host "  audit: $($g.Count) x $($g.Name)" }
+            $launchRecords = @($auditRecords | Where-Object { [string]$_.operation -like '*Launch*' })
+            $launches = Get-LatestLaunchByApp -Records $launchRecords -AppIds @($pendingApps | ForEach-Object { $_.AssetId })
+            $launchWindowEnd = $scanTime
+            foreach ($app in $pendingApps) { $app.UsageSignal = 'audit-log' }
+            $launchNote = "App launches were read from the audit log from $($windowStart.ToString('yyyy-MM-dd')): $($launchRecords.Count) launch event(s) across $($launches.Count) app(s)."
+            Write-Host "App launches: $($launchRecords.Count) launch event(s), $($launches.Count) app(s) matched"
+        }
+        catch {
+            $warnings.Add("App launches could not be read from the audit log, so apps were judged on modification only: $($_.Exception.Message)")
+            Write-Host "App launches: unavailable ($($_.Exception.Message))"
+        }
+    }
+    foreach ($app in $pendingApps) {
+        $launch = $null
+        if ($launches.ContainsKey($app.AssetId.ToLower())) { $launch = $launches[$app.AssetId.ToLower()] }
+        # The audit log is only kept for a limited time; keep the latest launch ever seen for this app.
+        if ($known.ContainsKey($app.AssetId)) {
+            $stored = ConvertTo-UtcDate (Get-Prop $known[$app.AssetId] "${px}_lastlaunchon")
+            if ($null -ne $stored -and ($null -eq $launch -or $stored -gt $launch)) { $launch = $stored }
+        }
+        $app.Signals['launch'] = $launch
+        Add-Record $app
+    }
+}
+
 # ---------- output ----------
 $stageOrder = @('Delete', 'DeleteWarning', 'Quarantine', 'QuarantineWarning', 'Exempt', 'Active')
 $sorted = @($records | Sort-Object @{ Expression = { [array]::IndexOf($stageOrder, $_.Stage) } }, @{ Expression = 'DaysInactive'; Descending = $true })
@@ -304,7 +389,7 @@ if ($flagged.Count -gt 0) {
 }
 if (@($sorted | Where-Object { $_.AssetType -eq 'app' }).Count -gt 0) {
     $md.Add('')
-    $md.Add('> App results rest on **last modification only**: no app launch signal is wired in yet, so an app that is used daily but not edited shows as inactive.')
+    $md.Add("> $launchNote")
 }
 if ($skippedManaged -gt 0) {
     $md.Add('')
@@ -352,6 +437,7 @@ if ($DataverseUrl) {
         "${px}_deletecount"            = $report.counts['Delete']
         "${px}_exemptcount"            = $report.counts['Exempt']
         "${px}_runurl"                 = $runUrl
+        "${px}_launchesthrough"        = (Iso $launchWindowEnd)
     } -ReturnId
 
     $events = 0
@@ -370,6 +456,7 @@ if ($DataverseUrl) {
             "${px}_assetcreatedon"      = (Iso $r.CreatedTime)
             "${px}_lastmodifiedon"      = (Iso $r.LastModifiedTime)
             "${px}_lastrunon"           = (Iso $r.LastRunTime)
+            "${px}_lastlaunchon"        = (Iso $r.LastLaunchTime)
             "${px}_lastactivityon"      = (Iso $r.LastActivityTime)
             "${px}_lastactivitysource"  = $r.LastActivitySource
             "${px}_usagesignal"         = $r.UsageSignal

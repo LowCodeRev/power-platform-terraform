@@ -56,6 +56,26 @@ Describe 'Get-LatestActivity' {
     }
 }
 
+Describe 'Get-LatestLaunchByApp' {
+    BeforeAll {
+        $script:AppA = '11111111-1111-1111-1111-111111111111'
+        $script:AppB = '22222222-2222-2222-2222-222222222222'
+        $script:Recs = @(
+            [pscustomobject]@{ createdDateTime = '2026-03-01T10:00:00Z'; operation = 'LaunchPowerApp'; auditData = [pscustomobject]@{ AppName = "/providers/Microsoft.PowerApps/apps/$AppA" } }
+            [pscustomobject]@{ createdDateTime = '2026-04-01T10:00:00Z'; operation = 'LaunchPowerApp'; auditData = [pscustomobject]@{ PropertyCollection = @([pscustomobject]@{ Name = 'resource.id'; Value = $AppA.ToUpper() }) } }
+            [pscustomobject]@{ createdDateTime = '2026-05-01T10:00:00Z'; operation = 'LaunchPowerApp'; auditData = [pscustomobject]@{ AppName = '33333333-3333-3333-3333-333333333333' } }
+        )
+    }
+    It 'keeps the latest launch per known app, wherever the id sits in the event' {
+        $r = Get-LatestLaunchByApp -Records $Recs -AppIds @($AppA, $AppB)
+        $r.Count | Should -Be 1
+        $r[$AppA] | Should -Be ([datetime]::new(2026, 4, 1, 10, 0, 0, [DateTimeKind]::Utc))
+    }
+    It 'returns nothing for no records' {
+        (Get-LatestLaunchByApp -Records @() -AppIds @($AppA)).Count | Should -Be 0
+    }
+}
+
 Describe 'Get-ActiveExemption' {
     BeforeAll {
         $script:Ex = @(
