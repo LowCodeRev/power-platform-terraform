@@ -237,6 +237,9 @@ Write-Host "Scanning $($envs.Count) environment(s), evaluating as of $($now.ToSt
 # A flow modified inside the inactivity window is active regardless of runs, so its run history is not fetched.
 $activeCutoff = $now.AddDays(-$periods.inactiveDays)
 $pendingApps = New-Object System.Collections.Generic.List[hashtable]
+# Environment and asset type pairs whose listing returned something. An empty listing can mean "none exist" or
+# "this identity cannot see them", so only a non-empty one is trusted when deciding an asset is gone.
+$listed = @{}
 
 foreach ($environment in $envs) {
     $envId = $environment.name
@@ -245,6 +248,7 @@ foreach ($environment in $envs) {
     if ($assetTypes -contains 'app') {
         $apps = @(Get-AllPages "https://api.powerapps.com/providers/Microsoft.PowerApps/scopes/admin/environments/$envId/apps?api-version=2016-11-01" $PowerApps)
         Write-Host "  $envName : $($apps.Count) app(s)"
+        if ($apps.Count -gt 0) { $listed["$envId|app"] = $true }
         foreach ($a in $apps) {
             $p = $a.properties
             $owner = Get-Prop $p 'owner'
@@ -263,6 +267,7 @@ foreach ($environment in $envs) {
     if ($assetTypes -contains 'flow') {
         $flows = @(Get-AllPages "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$envId/v2/flows?api-version=2016-11-01" $Flow)
         Write-Host "  $envName : $($flows.Count) flow(s)"
+        if ($flows.Count -gt 0) { $listed["$envId|flow"] = $true }
         foreach ($f in $flows) {
             $p = $f.properties
             # Flows shipped inside managed solutions (Microsoft's or a vendor's) are not the maker's to lose.
@@ -328,8 +333,10 @@ if ($pendingApps.Count -gt 0) {
             Write-Host "App launches: $($launchRecords.Count) launch event(s), $($launches.Count) app(s) matched"
         }
         catch {
-            $warnings.Add("App launches could not be read from the audit log, so apps were judged on modification only: $($_.Exception.Message)")
-            Write-Host "App launches: unavailable ($($_.Exception.Message))"
+            $why = $_.Exception.Message
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $why = "$why $($_.ErrorDetails.Message)" }
+            $warnings.Add("App launches could not be read from the audit log, so apps were judged on modification only: $why")
+            Write-Host "App launches: unavailable ($why)"
         }
     }
     foreach ($app in $pendingApps) {
@@ -497,11 +504,11 @@ if ($DataverseUrl) {
 
     # Assets in the scanned scope that no longer exist in the tenant are deactivated, not deleted: history stays.
     $seen = @{}; foreach ($r in $sorted) { $seen[$r.AssetId] = $true }
-    $scannedEnvs = @($envs | ForEach-Object { $_.name })
+    $typeName = @{}; foreach ($k in $typeValue.Keys) { $typeName[[int]$typeValue[$k]] = $k }
     $gone = 0
-    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_environmentid&`$filter=statecode eq 0")) {
+    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_environmentid,${px}_assettype&`$filter=statecode eq 0")) {
         if ($seen.ContainsKey([string]$row."${px}_assetid")) { continue }
-        if ($scannedEnvs -notcontains [string]$row."${px}_environmentid") { continue }
+        if (-not $listed.ContainsKey("$($row."${px}_environmentid")|$($typeName[[int]$row."${px}_assettype"])")) { continue }
         Invoke-Dv PATCH "${px}_governedassets($($row."${px}_governedassetid"))" @{ statecode = 1; statuscode = 2 } | Out-Null
         $gone++
     }
