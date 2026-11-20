@@ -108,7 +108,9 @@ Data sources worth using: `connectors` (full connector catalogue with `unblockab
 GitHub repo (this folder)
 ├── bootstrap/            run ONCE, as you (az login, use_cli). Local or Azure state.
 │   ├── identity.tf       azuread app + SPN + API permissions + admin consent
-│   ├── pp_admin.tf       powerplatform_admin_management_application
+│   ├── pp_admin.tf       powerplatform_admin_management_application (legacy BAP admin API)
+│   ├── pp_rbac.tf        powerplatform_rbac_role_assignment: Contributor at tenant scope (api.powerplatform.com)
+│   ├── graph.tf          Graph app roles so CI can manage the PP-Makers group
 │   ├── federation.tf     GitHub OIDC federated credentials (main branch + PR + environment)
 │   └── state.tf          (optional) Azure RG + storage account + container for remote state
 ├── governance/           tenant-wide, one state file, applied by CI via OIDC
@@ -402,6 +404,14 @@ locked to core Microsoft 365 with everything else blocked) and the Managed Envir
 group (sharing limits, usage insights, Solution Checker warn, 7-day backups). Verified against the live
 connector inventory so no existing app or flow is affected. Still to decide: tenant settings hardening
 (non-admin environment creation, trial creation, portal creation, environment routing).
+
+PDE request process (PR "Personal developer environments: request intake, module, group rules"): makers no
+longer create environments. The ITSM portal (or an admin from the Actions tab) triggers the `pde-request`
+workflow, which writes `environments/pde-requests/<TICKET>.json` and opens a PR; merge + approved apply
+provisions a Developer environment owned by the maker (Sandbox fallback with the maker as System
+Administrator) inside the "Personal Developer Environments" group. Decommission is the same path in reverse.
+Process doc: docs/pde-process.md. First sample request: ticket REQ-0001 for Tony Stark, raised after merge.
+Tenant settings hardening is PR #3 (all six options; developer environment creation also closed, no routing).
 
 ---
 

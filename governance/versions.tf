@@ -6,6 +6,10 @@ terraform {
       source  = "microsoft/power-platform"
       version = "~> 4.2"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
 
   # Partial backend configuration. Values come from bootstrap output `backend_hcl`, passed at init time:
@@ -20,3 +24,6 @@ terraform {
 #   local: POWER_PLATFORM_USE_CLI=true          (after `az login --allow-no-subscriptions`)
 #   CI:    POWER_PLATFORM_USE_OIDC=true + POWER_PLATFORM_CLIENT_ID + POWER_PLATFORM_TENANT_ID
 provider "powerplatform" {}
+
+# Entra ID, for the PP-Makers security group. Azure CLI locally; ARM_USE_OIDC + ARM_CLIENT_ID + ARM_TENANT_ID in CI.
+provider "azuread" {}

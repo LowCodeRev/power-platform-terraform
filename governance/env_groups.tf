@@ -6,10 +6,17 @@ resource "powerplatform_environment_group" "rnd" {
   description  = "LowCodeRev Research and Development group"
 }
 
+# Every personal developer environment (PDE) provisioned from environments/pde-requests lands here.
+resource "powerplatform_environment_group" "pde" {
+  display_name = "Personal Developer Environments"
+  description  = "Requested through the ITSM portal and provisioned from the power-platform-terraform repository. One per maker."
+}
+
 output "environment_group_ids" {
-  description = "Consumed by the environments root via remote state or copied by hand."
+  description = "Consumed by the environments root through terraform_remote_state."
   value = {
     rnd = powerplatform_environment_group.rnd.id
+    pde = powerplatform_environment_group.pde.id
   }
 }
 
@@ -40,6 +47,32 @@ resource "powerplatform_environment_group_rule_set" "rnd" {
     }
 
     # R+D data is disposable; keep the shortest retention.
+    backup_retention = {
+      period_in_days = 7
+    }
+  }
+}
+
+# Personal developer environments are for one maker's own work. Sharing is tightly capped so a PDE cannot
+# become a de facto team environment; anything worth sharing moves to a project environment via a solution.
+resource "powerplatform_environment_group_rule_set" "pde" {
+  environment_group_id = powerplatform_environment_group.pde.id
+
+  rules = {
+    sharing_controls = {
+      share_mode      = "exclude sharing with security groups"
+      share_max_limit = 5
+    }
+
+    usage_insights = {
+      insights_enabled = true
+    }
+
+    solution_checker_enforcement = {
+      solution_checker_mode = "warn"
+      send_emails_enabled   = true
+    }
+
     backup_retention = {
       period_in_days = 7
     }

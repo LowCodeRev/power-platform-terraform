@@ -1,0 +1,18 @@
+{
+  "mode": "report",
+  "periods": {
+    "inactiveDays": 90,
+    "quarantineWarningDays": 14,
+    "quarantinedDays": 90,
+    "deleteWarningDays": 14
+  },
+  "assetTypes": ["app", "flow", "agent"],
+  "enforcement": { "quarantineAgents": true },
+  "excludeManaged": true,
+  "appLaunchSignal": { "enabled": true, "lookbackDays": 180, "timeoutMinutes": 30 },
+  "environments": {
+    "include": [],
+    "exclude": []
+  },
+  "exemptions": []
+}

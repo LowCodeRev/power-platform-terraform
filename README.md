@@ -11,7 +11,9 @@ See `PLAN.md` for the research, phased plan, and tenant inventory.
 | `bootstrap/` | local, then migrated to Azure Storage | you, interactively | App registration, Power Platform admin registration, CI federation, state storage |
 | `governance/` | Azure Storage `governance.tfstate` | CI (OIDC) or you | Tenant settings, tenant isolation, DLP, environment groups and rule sets |
 | `environments/` | Azure Storage `environments.tfstate` | CI (OIDC) or you | Environment lifecycle and managed environment settings |
-| `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection |
+| `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection, nightly PDE adoption, PDE decommission |
+| `modules/pde/` | | | One personal developer environment per record; adopted from environment routing nightly. See [docs/pde-process.md](docs/pde-process.md) |
+| `policies/`, `scripts/inactive-assets/` | none | CI (OIDC) or you | Inactive asset policy scan; report only except agent quarantine. See below |
 
 ## Local runs
 
@@ -69,6 +71,11 @@ terraform plan        # must report "No changes"
 If `terraform apply` in step 1 fails on the admin management application with a consent or scope error, run
 `az login --allow-no-subscriptions --tenant lowcoderev.ai --scope https://api.powerplatform.com/.default` and retry.
 
+The service principal needs two separate Power Platform grants, both in bootstrap: the admin management application
+registration (`pp_admin.tf`, covers the legacy BAP admin API) and a Power Platform RBAC role assignment
+(`pp_rbac.tf`, Contributor at tenant scope, covers `api.powerplatform.com` and the governance host). Missing the
+second one shows up as a bare `403 Forbidden` on environment group rule sets and rule-based policies.
+
 ## CI variables (GitHub repository settings, Variables not Secrets, nothing here is secret)
 
 | Variable | Value |
@@ -83,3 +90,63 @@ Repository: `LowCodeRev/power-platform-terraform`. The federated credentials on 
 yourself as a required reviewer before the first apply run, and protect `main` so the `plan` check must pass.
 
 First PR: exercises the plan workflow and the service principal OIDC path.
+
+## Inactive asset policy (report only, except agent quarantine)
+
+`scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` lists every app, cloud flow and Copilot Studio agent and
+reports where each one sits on the lifecycle timeline. Apps and flows are never changed. The `inactive-assets`
+workflow runs it daily and publishes the result as the run summary and an artifact (JSON, CSV, Markdown).
+
+Agent quarantine is the one action the scan takes. It needs both `enforcement.quarantineAgents` in the policy and
+`-Enforce` on the run (the daily run and a manual run with "enforce" ticked pass it; pull request runs never do).
+An agent at or past the Quarantine stage is quarantined through the Power Platform API
+(`copilotstudio/.../botQuarantine/SetAsQuarantined`). An agent this policy quarantined is released when it is
+active again or exempt; one quarantined by anyone else is left alone. Without `-Enforce` the report lists what
+would be done.
+
+```powershell
+# Pilot: enforce for one agent only, signing in to the Power Platform API through the browser
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -DataverseUrl https://lowcoderev.crm.dynamics.com -Enforce -InteractiveSignIn -EnforceAssetId <bot id>
+```
+
+Timeline, in days since the last modification or use, from `policies/inactive-assets.json`:
+
+| Stage | Starts at (defaults) |
+|---|---|
+| Quarantine warning | 90 (`inactiveDays`) |
+| Quarantine | 104 (+ `quarantineWarningDays` 14) |
+| Delete warning | 194 (+ `quarantinedDays` 90) |
+| Delete | 208 (+ `deleteWarningDays` 14) |
+
+Testing without waiting: override any period for one run, or move "today".
+
+```powershell
+az login --allow-no-subscriptions --tenant lowcoderev.ai
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -InactiveDays 1 -QuarantineWarningDays 1 -QuarantinedDays 1 -DeleteWarningDays 1
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -AsOf 2027-06-01
+```
+
+The same overrides are inputs on the workflow's manual run. Exempt an asset by adding
+`{ "assetId": "<id>", "reason": "...", "expires": "2027-01-31" }` to `exemptions` (`expires` is optional).
+
+Known limits:
+
+- App launches come from the Purview audit log (Graph `security/auditLog/queries`), which needs
+  `AuditLogsQuery.Read.All` (granted to the service principal in `bootstrap/graph.tf`) and auditing turned on
+  in the tenant. The query is slow and asynchronous; `appLaunchSignal` in the policy sets how far back it looks
+  and how long the scan waits. If it cannot be read the scan still completes and apps fall back to last
+  modification only, so an app that is used but not edited shows as inactive.
+- The audit log is kept for a limited time. With `-DataverseUrl` the last launch seen for each app is stored, so
+  it keeps counting after it ages out; without Dataverse each run only knows what is still in the log.
+- Flow run history is kept by the platform for about 28 days, so a flow's last run older than that is invisible.
+- Flows and agents from managed solutions are skipped (`excludeManaged`). Model-driven apps are not scanned.
+- Agents are read from each environment's Dataverse (`bots`, `conversationtranscripts`), so the scan's identity
+  needs read access there (`Grant-InactiveAssetAccess.ps1` per environment for the service principal).
+  Transcripts are kept about 30 days; with `-DataverseUrl` the last conversation seen is stored.
+- The quarantine API wants a user token carrying `CopilotStudio.AdminActions.Invoke`, a delegated permission.
+  The Azure CLI's own sign-in does not carry it (403), hence `-InteractiveSignIn` locally. Whether the service
+  principal can call it from CI is not yet proven; if it cannot, the run reports one warning and changes nothing.
+- Releasing needs `-DataverseUrl`: "quarantined by this policy" is remembered in the asset's platform state.
+- The stage is a projection from last activity, and owners are not notified yet. Agent quarantine therefore
+  happens without a warning having been sent. Enforcement should count each warning period from the date the
+  owner was actually notified once notification exists.

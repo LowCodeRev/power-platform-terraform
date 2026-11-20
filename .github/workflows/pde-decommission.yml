@@ -1,0 +1,47 @@
+name: pde-decommission
+
+# Remove a personal developer environment. Deletes its record and opens a PR whose plan shows the destroy.
+# Nothing is destroyed until that PR is merged and the apply approved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      record:
+        description: Record file name without .json (e.g. routed-<environment id> or REQ-0001)
+        required: true
+      reason:
+        description: Why (leaver, project ended, maker request, ticket id)
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  decommission:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RECORD: ${{ github.event.inputs.record }}
+      REASON: ${{ github.event.inputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove record and open PR
+        run: |
+          set -euo pipefail
+          f="environments/pde-requests/${RECORD}.json"
+          if [ ! -e "$f" ]; then echo "::error::$f does not exist"; exit 1; fi
+          who=$(python3 -c "import json;d=json.load(open('$f'));print(d.get('display_name') or d.get('requester_upn'))")
+          branch="pde/decommission-${RECORD,,}"
+          git config user.name "pde-decommission bot"
+          git config user.email "pde-decommission@lowcoderev.ai"
+          git checkout -b "$branch"
+          git rm -q "$f"
+          git commit -q -m "Decommission PDE ${RECORD}" -m "Reason: ${REASON}. Requested by ${GITHUB_ACTOR}."
+          git push -u origin "$branch"
+          url=$(gh pr create --base main --head "$branch" --label pde \
+            --title "Decommission PDE: ${who}" \
+            --body "$(printf 'Removes `%s`.\n\n**Reason:** %s\n\nThe plan comment shows the environment being **destroyed**. Merge and approve the apply only after the maker has exported anything they need. This PR is not auto-merged.' "$f" "$REASON")")
+          gh workflow run plan.yml --ref "$branch"
+          echo "### Decommission PR: $url" >> "$GITHUB_STEP_SUMMARY"
