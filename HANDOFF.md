@@ -1,7 +1,9 @@
 # Handoff: inactive asset policy and governance dashboard
 
-Written 2026-11-18, updated 2026-11-20. Branch `feature/inactive-assets` (draft PR #7, base
-`feature/pde-requests`). All work is committed and pushed.
+Written 2026-11-18, updated 2026-11-20. Everything is on `main`: merged on 2026-11-20 at the user's request
+through PR #7 (`feature/inactive-assets` into `feature/pde-requests`) and PR #4 (`feature/pde-requests` into
+`main`, which also brought in the personal developer environment work). The daily scan on `main` therefore
+passes `-Enforce` from now on.
 
 **Start here:** the latest work is "Agent quarantine" below; what to do next is under "Next steps, in order".
 
@@ -105,8 +107,9 @@ A. **Prove the scan's own quarantine and release** on the test agent. The user m
       "quarantined" and store platform state "Quarantined by policy".
    3. The same without the period overrides should report "released".
    4. Quarantine by hand again if the user still wants it left that way.
-B. **Ask the user to confirm two defaults:** enforcement is switched on in the policy and on the daily run (it
-   takes effect once this reaches `main`), and agents are quarantined with no warning sent to the owner.
+B. **Ask the user to confirm two defaults:** enforcement is switched on in the policy and on the daily run (live
+   now that this is on `main`; set `enforcement.quarantineAgents` to false to switch it off), and agents are
+   quarantined with no warning sent to the owner.
 C. **Rerun `Grant-InactiveAssetAccess.ps1`** for LowCodeRev, with the user's go-ahead: it adds read on agents and
    on conversation transcripts (content included) to the service principal's role. Without it CI lists no agents.
 D. **Find out whether CI can quarantine:** manual workflow run with "enforce" ticked and short periods, then read
