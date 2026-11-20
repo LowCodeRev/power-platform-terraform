@@ -1,0 +1,98 @@
+name: inactive-assets
+
+# Inactive asset policy. Lists every app, cloud flow and agent, places each on the lifecycle timeline
+# (active -> quarantine warning -> quarantine -> delete warning -> delete) and publishes the result as the run
+# summary and an artifact. Policy values live in policies/inactive-assets.json; the inputs below override them
+# for a single run so the timeline can be tested without waiting 90 days.
+#
+# Apps and flows are report only. Agents are quarantined (and released) for real on the daily run and on a manual
+# run with "enforce" ticked, when the policy has enforcement.quarantineAgents. Pull request runs never enforce.
+
+on:
+  schedule:
+    - cron: "30 11 * * *" # 11:30 UTC daily, after the drift run
+  pull_request: # never enforces, so a PR that touches the policy or the script shows its effect safely
+    paths:
+      - policies/inactive-assets.json
+      - scripts/inactive-assets/**
+      - .github/workflows/inactive-assets.yml
+  workflow_dispatch:
+    inputs:
+      inactive_days:
+        description: Override inactiveDays (decimals allowed)
+        required: false
+      quarantine_warning_days:
+        description: Override quarantineWarningDays
+        required: false
+      quarantined_days:
+        description: Override quarantinedDays
+        required: false
+      delete_warning_days:
+        description: Override deleteWarningDays
+        required: false
+      as_of:
+        description: Evaluate as if today were this date (YYYY-MM-DD)
+        required: false
+      enforce:
+        description: Quarantine and release agents for real (applies to this run's periods and date, overrides included)
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: inactive-assets
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pester
+        shell: pwsh
+        run: Invoke-Pester scripts/inactive-assets/tests -CI
+
+  scan:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: plan # the ungated trust (see plan.yml); the scan's only write to the tenant is agent quarantine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in as the Terraform service principal (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.PP_CLIENT_ID }}
+          tenant-id: ${{ vars.PP_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Scan
+        shell: pwsh
+        env:
+          INACTIVE_DAYS: ${{ github.event.inputs.inactive_days }}
+          QUARANTINE_WARNING_DAYS: ${{ github.event.inputs.quarantine_warning_days }}
+          QUARANTINED_DAYS: ${{ github.event.inputs.quarantined_days }}
+          DELETE_WARNING_DAYS: ${{ github.event.inputs.delete_warning_days }}
+          AS_OF: ${{ github.event.inputs.as_of }}
+          ENFORCE: ${{ github.event_name == 'schedule' || github.event.inputs.enforce == 'true' }}
+          # Set this repository variable to log scans to Dataverse (the service principal needs
+          # Grant-InactiveAssetAccess.ps1 run in that environment). Unset, the scan only writes the report.
+          INACTIVE_ASSETS_DATAVERSE_URL: ${{ vars.INACTIVE_ASSETS_DATAVERSE_URL }}
+        run: |
+          $params = @{ OutputPath = 'inactive-assets-report' }
+          if ($env:INACTIVE_DAYS) { $params.InactiveDays = [double]$env:INACTIVE_DAYS }
+          if ($env:QUARANTINE_WARNING_DAYS) { $params.QuarantineWarningDays = [double]$env:QUARANTINE_WARNING_DAYS }
+          if ($env:QUARANTINED_DAYS) { $params.QuarantinedDays = [double]$env:QUARANTINED_DAYS }
+          if ($env:DELETE_WARNING_DAYS) { $params.DeleteWarningDays = [double]$env:DELETE_WARNING_DAYS }
+          if ($env:AS_OF) { $params.AsOf = [datetime]$env:AS_OF }
+          if ($env:ENFORCE -eq 'true') { $params.Enforce = $true }
+          ./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 @params
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inactive-assets-report
+          path: inactive-assets-report
+          retention-days: 90

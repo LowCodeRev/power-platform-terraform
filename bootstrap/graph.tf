@@ -10,6 +10,9 @@ locals {
   graph_app_roles = [
     "Group.ReadWrite.All", # create PP-Makers and manage its membership
     "User.Read.All",       # look up makers by UPN
+    # Read app launch events from the Purview audit log for the inactive asset scan. Read-only, but it
+    # covers the whole tenant audit log, not just Power Platform; Graph has no narrower Power Apps scope.
+    "AuditLogsQuery.Read.All",
   ]
 }
 
