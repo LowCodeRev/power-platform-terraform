@@ -22,6 +22,6 @@ export interface ReportDef {
 export const OVERVIEW: ReportDef = { id: 'overview', label: 'Overview', icon: LayoutDashboard, blurb: 'Governance posture across the tenant' }
 
 export const REPORTS: ReportDef[] = [
-  { id: 'inactive-assets', label: 'Inactive assets', icon: Hourglass, blurb: 'Apps and flows with no changes or runs, and what the policy would do with them' },
+  { id: 'inactive-assets', label: 'Inactive assets', icon: Hourglass, blurb: 'Apps, flows and agents with no changes or use, and what the policy would do with them' },
   { id: null, label: 'DLP policy drift', icon: ShieldCheck, blurb: 'Data loss prevention policies compared with the definitions in source control' },
 ]

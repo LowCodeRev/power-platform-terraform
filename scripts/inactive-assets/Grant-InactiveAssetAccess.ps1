@@ -5,7 +5,9 @@ Gives the scan's service principal access to the inactive asset log in one Datav
 .DESCRIPTION
 Creates a narrow security role ("Inactive Asset Scan"), an application user for the service principal, and assigns
 the role. The role can read, create and update the three log tables, read the metadata the scan looks up, and read
-cloud flow definitions. It cannot delete rows and holds nothing else in the environment.
+cloud flow definitions, agents (bots) and conversation transcripts (the scan only asks for each agent's latest
+conversation time, but the privilege covers transcript content). It cannot delete rows and holds nothing else in
+the environment.
 
 Run once per environment as a Dataverse System Administrator. Idempotent: a second run reports [skip] throughout.
 The last step checks the grant by calling Dataverse as the application user (impersonation).
@@ -44,7 +46,7 @@ $wanted = New-Object System.Collections.Generic.List[string]
 foreach ($table in 'governedasset', 'assetscan', 'assetevent') {
     foreach ($verb in 'Create', 'Read', 'Write', 'Append', 'AppendTo') { $wanted.Add("prv$verb${p}_$table") }
 }
-foreach ($n in 'prvReadEntity', 'prvReadAttribute', 'prvReadRelationship', 'prvReadOptionSet', 'prvReadEntityKey', 'prvReadWorkflow') { $wanted.Add($n) }
+foreach ($n in 'prvReadEntity', 'prvReadAttribute', 'prvReadRelationship', 'prvReadOptionSet', 'prvReadEntityKey', 'prvReadWorkflow', 'prvReadbot', 'prvReadconversationtranscript') { $wanted.Add($n) }
 
 $privileges = @()
 $target = New-Object System.Collections.Generic.List[string]

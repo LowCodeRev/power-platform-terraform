@@ -4,7 +4,8 @@
  */
 export const Rev_governedassetsrev_assettype = {
   910270000: 'App',
-  910270001: 'Flow'
+  910270001: 'Flow',
+  910270002: 'Agent'
 } as const;
 export type Rev_governedassetsrev_assettype = keyof typeof Rev_governedassetsrev_assettype;
 export const Rev_governedassetsrev_stage = {

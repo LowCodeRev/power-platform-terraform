@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'motion/react'
-import { AppWindow, ArrowRight, CalendarClock, Search, Workflow } from 'lucide-react'
+import { AppWindow, ArrowRight, Bot, CalendarClock, Search, Workflow } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -8,16 +8,23 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Conveyor, CountUp, HealthGauge, STAGE_COLOR, StagePill, TrendChart } from '@/components/parts'
 import { cn } from '@/lib/utils'
 import { STAGES, fmtDate, stageOf, typeOf } from '@/data'
-import type { Asset, Scan, StageKey } from '@/data'
+import type { Asset, AssetKind, Scan, StageKey } from '@/data'
 import { spaced } from '@/inactive'
 import type { InactiveSummary } from '@/inactive'
 import { glass, rise } from '@/shell'
 
 type StageFilter = StageKey | 'Flagged' | 'All'
 
+const KIND_ICON = { App: AppWindow, Flow: Workflow, Agent: Bot } as const
+
+function KindIcon({ kind }: { kind: AssetKind }) {
+  const Icon = KIND_ICON[kind]
+  return <Icon className="size-4 shrink-0 text-muted-foreground" aria-label={kind} />
+}
+
 export function InactiveAssetsReport({ s, scans, onSelect }: { s: InactiveSummary; scans: Scan[]; onSelect: (a: Asset) => void }) {
   const [stage, setStage] = useState<StageFilter>('Flagged')
-  const [type, setType] = useState<'All' | 'App' | 'Flow'>('All')
+  const [type, setType] = useState<'All' | AssetKind>('All')
   const [query, setQuery] = useState('')
   const { assets, counts, periods, total, healthy, flagged } = s
   const deleteAt = periods.inactive + periods.warnQ + periods.quarantined + periods.warnD
@@ -110,6 +117,7 @@ export function InactiveAssetsReport({ s, scans, onSelect }: { s: InactiveSummar
                 <ToggleGroupItem value="All">All</ToggleGroupItem>
                 <ToggleGroupItem value="App"><AppWindow /> Apps</ToggleGroupItem>
                 <ToggleGroupItem value="Flow"><Workflow /> Flows</ToggleGroupItem>
+                <ToggleGroupItem value="Agent"><Bot /> Agents</ToggleGroupItem>
               </ToggleGroup>
               <ToggleGroup type="single" variant="outline" value={stage === 'Flagged' || stage === 'All' ? stage : ''} onValueChange={(v) => v && setStage(v as StageFilter)} aria-label="Stage scope">
                 <ToggleGroupItem value="Flagged">Flagged</ToggleGroupItem>
@@ -134,7 +142,7 @@ export function InactiveAssetsReport({ s, scans, onSelect }: { s: InactiveSummar
                       <TableRow key={a.rev_governedassetid} tabIndex={0} className="cursor-pointer" onClick={() => onSelect(a)} onKeyDown={(e) => e.key === 'Enter' && onSelect(a)}>
                         <TableCell className="font-medium">
                           <span className="flex items-center gap-2">
-                            {typeOf(a) === 'Flow' ? <Workflow className="size-4 shrink-0 text-muted-foreground" aria-label="Flow" /> : <AppWindow className="size-4 shrink-0 text-muted-foreground" aria-label="App" />}
+                            <KindIcon kind={typeOf(a)} />
                             {a.rev_name}
                           </span>
                         </TableCell>

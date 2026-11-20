@@ -118,4 +118,26 @@ function Get-ActiveExemption {
     return $null
 }
 
-Export-ModuleMember -Function ConvertTo-UtcDate, Get-InactiveAssetStage, Get-LatestActivity, Get-LatestLaunchByApp, Get-ActiveExemption
+function Get-AgentQuarantineAction {
+    <#
+    .SYNOPSIS
+    Decides what the policy does to an agent: 'Quarantine', 'Release' or nothing ($null).
+
+    .DESCRIPTION
+    An agent is quarantined from the Quarantine stage onwards. It is released when it is active again, back in
+    its warning period, or exempt, but only if this policy quarantined it: an agent an administrator quarantined
+    for another reason is never released here.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Stage,
+        [bool] $QuarantinedByPolicy
+    )
+    if ($Stage -in 'Quarantine', 'DeleteWarning', 'Delete') {
+        if ($QuarantinedByPolicy) { return $null }
+        return 'Quarantine'
+    }
+    if ($QuarantinedByPolicy) { return 'Release' }
+    return $null
+}
+
+Export-ModuleMember -Function ConvertTo-UtcDate, Get-InactiveAssetStage, Get-LatestActivity, Get-LatestLaunchByApp, Get-ActiveExemption, Get-AgentQuarantineAction

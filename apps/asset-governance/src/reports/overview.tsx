@@ -45,7 +45,7 @@ export function Overview({ s, events, onOpen, onSelect }: { s: InactiveSummary; 
   return (
     <div className="grid gap-5">
       <motion.section {...rise(1)} className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Key figures">
-        <Kpi label="Assets tracked" hint="Apps and cloud flows under policy"><CountUp value={s.total} /></Kpi>
+        <Kpi label="Assets tracked" hint="Apps, cloud flows and agents under policy"><CountUp value={s.total} /></Kpi>
         <Kpi label="Healthy" hint="Active or exempt" color={STAGE_COLOR.Active}><CountUp value={pct} />%</Kpi>
         <Kpi label="Flagged" hint="Past the inactivity threshold" color={s.flagged ? STAGE_COLOR.Quarantine : undefined}><CountUp value={s.flagged} /></Kpi>
         <Kpi label="Next action" hint={next ? `${next.a.rev_name}: ${spaced(next.a.rev_nextstage).toLowerCase()}` : 'Nothing scheduled'} color={next ? STAGE_COLOR.QuarantineWarning : undefined}>

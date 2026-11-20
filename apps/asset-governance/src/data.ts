@@ -27,7 +27,9 @@ export function stageOf(value: unknown): StageKey | null {
 
 export const stageLabel = (key: StageKey | null) => STAGES.find((s) => s.key === key)?.label ?? 'New'
 
-export const typeOf = (a: Asset) => (Number(a.rev_assettype) % 10 === 1 ? 'Flow' : 'App')
+// Asset type choice values: the last digit is the type's position (App, Flow, Agent).
+export type AssetKind = 'App' | 'Flow' | 'Agent'
+export const typeOf = (a: Asset): AssetKind => (['App', 'Flow', 'Agent'] as const)[Number(a.rev_assettype) % 10] ?? 'App'
 
 export interface Snapshot {
   assets: Asset[]

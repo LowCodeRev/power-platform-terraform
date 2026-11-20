@@ -6,7 +6,8 @@
     "quarantinedDays": 90,
     "deleteWarningDays": 14
   },
-  "assetTypes": ["app", "flow"],
+  "assetTypes": ["app", "flow", "agent"],
+  "enforcement": { "quarantineAgents": true },
   "excludeManaged": true,
   "appLaunchSignal": { "enabled": true, "lookbackDays": 180, "timeoutMinutes": 30 },
   "environments": {

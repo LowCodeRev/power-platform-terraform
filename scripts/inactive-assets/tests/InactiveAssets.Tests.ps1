@@ -76,6 +76,24 @@ Describe 'Get-LatestLaunchByApp' {
     }
 }
 
+Describe 'Get-AgentQuarantineAction' {
+    It 'is <Action> at <Stage> when quarantined by policy is <Held>' -ForEach @(
+        @{ Stage = 'Active'; Held = $false; Action = $null }
+        @{ Stage = 'QuarantineWarning'; Held = $false; Action = $null }
+        @{ Stage = 'Exempt'; Held = $false; Action = $null }
+        @{ Stage = 'Quarantine'; Held = $false; Action = 'Quarantine' }
+        @{ Stage = 'DeleteWarning'; Held = $false; Action = 'Quarantine' }
+        @{ Stage = 'Delete'; Held = $false; Action = 'Quarantine' }
+        @{ Stage = 'Quarantine'; Held = $true; Action = $null }
+        @{ Stage = 'Delete'; Held = $true; Action = $null }
+        @{ Stage = 'Active'; Held = $true; Action = 'Release' }
+        @{ Stage = 'QuarantineWarning'; Held = $true; Action = 'Release' }
+        @{ Stage = 'Exempt'; Held = $true; Action = 'Release' }
+    ) {
+        Get-AgentQuarantineAction -Stage $Stage -QuarantinedByPolicy $Held | Should -Be $Action
+    }
+}
+
 Describe 'Get-ActiveExemption' {
     BeforeAll {
         $script:Ex = @(

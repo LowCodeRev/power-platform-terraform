@@ -13,7 +13,7 @@ See `PLAN.md` for the research, phased plan, and tenant inventory.
 | `environments/` | Azure Storage `environments.tfstate` | CI (OIDC) or you | Environment lifecycle and managed environment settings |
 | `.github/workflows/` | | | Plan on PR, gated apply on main, nightly drift detection, nightly PDE adoption, PDE decommission |
 | `modules/pde/` | | | One personal developer environment per record; adopted from environment routing nightly. See [docs/pde-process.md](docs/pde-process.md) |
-| `policies/`, `scripts/inactive-assets/` | none | CI (OIDC) or you | Inactive asset policy scan, report only. See below |
+| `policies/`, `scripts/inactive-assets/` | none | CI (OIDC) or you | Inactive asset policy scan; report only except agent quarantine. See below |
 
 ## Local runs
 
@@ -91,13 +91,25 @@ yourself as a required reviewer before the first apply run, and protect `main` s
 
 First PR: exercises the plan workflow and the service principal OIDC path.
 
-## Inactive asset policy (report only)
+## Inactive asset policy (report only, except agent quarantine)
 
-`scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` lists every app and cloud flow and reports where each one
-sits on the lifecycle timeline. It changes nothing in the tenant. The `inactive-assets` workflow runs it daily and
-publishes the result as the run summary and an artifact (JSON, CSV, Markdown).
+`scripts/inactive-assets/Invoke-InactiveAssetScan.ps1` lists every app, cloud flow and Copilot Studio agent and
+reports where each one sits on the lifecycle timeline. Apps and flows are never changed. The `inactive-assets`
+workflow runs it daily and publishes the result as the run summary and an artifact (JSON, CSV, Markdown).
 
-Timeline, in days since the last modification or run, from `policies/inactive-assets.json`:
+Agent quarantine is the one action the scan takes. It needs both `enforcement.quarantineAgents` in the policy and
+`-Enforce` on the run (the daily run and a manual run with "enforce" ticked pass it; pull request runs never do).
+An agent at or past the Quarantine stage is quarantined through the Power Platform API
+(`copilotstudio/.../botQuarantine/SetAsQuarantined`). An agent this policy quarantined is released when it is
+active again or exempt; one quarantined by anyone else is left alone. Without `-Enforce` the report lists what
+would be done.
+
+```powershell
+# Pilot: enforce for one agent only, signing in to the Power Platform API through the browser
+./scripts/inactive-assets/Invoke-InactiveAssetScan.ps1 -DataverseUrl https://lowcoderev.crm.dynamics.com -Enforce -InteractiveSignIn -EnforceAssetId <bot id>
+```
+
+Timeline, in days since the last modification or use, from `policies/inactive-assets.json`:
 
 | Stage | Starts at (defaults) |
 |---|---|
@@ -127,6 +139,14 @@ Known limits:
 - The audit log is kept for a limited time. With `-DataverseUrl` the last launch seen for each app is stored, so
   it keeps counting after it ages out; without Dataverse each run only knows what is still in the log.
 - Flow run history is kept by the platform for about 28 days, so a flow's last run older than that is invisible.
-- Flows from managed solutions are skipped (`excludeManaged`). Model-driven apps are not scanned.
-- The report is a projection from last activity. Enforcement must count each warning period from the date the
-  owner was actually notified.
+- Flows and agents from managed solutions are skipped (`excludeManaged`). Model-driven apps are not scanned.
+- Agents are read from each environment's Dataverse (`bots`, `conversationtranscripts`), so the scan's identity
+  needs read access there (`Grant-InactiveAssetAccess.ps1` per environment for the service principal).
+  Transcripts are kept about 30 days; with `-DataverseUrl` the last conversation seen is stored.
+- The quarantine API wants a user token carrying `CopilotStudio.AdminActions.Invoke`, a delegated permission.
+  The Azure CLI's own sign-in does not carry it (403), hence `-InteractiveSignIn` locally. Whether the service
+  principal can call it from CI is not yet proven; if it cannot, the run reports one warning and changes nothing.
+- Releasing needs `-DataverseUrl`: "quarantined by this policy" is remembered in the asset's platform state.
+- The stage is a projection from last activity, and owners are not notified yet. Agent quarantine therefore
+  happens without a warning having been sent. Enforcement should count each warning period from the date the
+  owner was actually notified once notification exists.

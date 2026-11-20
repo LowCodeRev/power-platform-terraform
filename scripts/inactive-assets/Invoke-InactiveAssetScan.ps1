@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-Inactive asset policy scan (report only). Lists every app and cloud flow in the tenant and reports which ones
-the policy would warn about, quarantine or delete. It changes nothing in the tenant.
+Inactive asset policy scan. Lists every app, cloud flow and Copilot Studio agent in the tenant and reports which
+ones the policy would warn about, quarantine or delete. Without -Enforce it changes nothing in the tenant.
 
 .DESCRIPTION
 Policy values come from policies/inactive-assets.json; any period can be overridden per run for testing, and
@@ -12,6 +12,15 @@ Signals used for "last activity":
          (Graph security/auditLog/queries, needs AuditLogsQuery.Read.All). If the audit log cannot be read the
          scan still completes: app results then rest on modification only and are marked UsageSignal = unavailable.
   flows  lastModifiedTime plus the most recent run from run history (the platform keeps about 28 days).
+  agents modifiedon and publishedon from the environment's Dataverse bots table plus the most recent conversation
+         transcript (kept about 30 days). Environments without Dataverse have no agents.
+
+The one action the scan can take is quarantining agents, and only with -Enforce and enforcement.quarantineAgents
+set in the policy. An agent at or past the Quarantine stage is quarantined through the Power Platform API; one
+this policy quarantined is released when it is active again or exempt. Releasing needs -DataverseUrl, which is
+where "quarantined by this policy" is remembered. The API accepts a user token carrying
+CopilotStudio.AdminActions.Invoke, which the Azure CLI's own sign-in does not; -InteractiveSignIn gets one
+through the browser. Apps and flows are never changed.
 
 With -DataverseUrl the scan is also logged to Dataverse: each asset's current state is upserted, the run is
 recorded with its counts, and every change of stage becomes an event. The last run seen for a flow and the last
@@ -26,6 +35,8 @@ Authentication uses the current Azure CLI session (`az login` locally, azure/log
 ./Invoke-InactiveAssetScan.ps1 -InactiveDays 1 -QuarantineWarningDays 1 -QuarantinedDays 1 -DeleteWarningDays 1
 .EXAMPLE
 ./Invoke-InactiveAssetScan.ps1 -AsOf 2027-06-01
+.EXAMPLE
+./Invoke-InactiveAssetScan.ps1 -Enforce -InteractiveSignIn -EnforceAssetId fb95d810-0507-4619-8d4d-1912d9f48b7c
 #>
 [CmdletBinding()]
 param(
@@ -40,6 +51,12 @@ param(
     [string] $DataverseUrl = $env:INACTIVE_ASSETS_DATAVERSE_URL,
     # Do not query the audit log for app launches on this run.
     [switch] $SkipLaunchSignal,
+    # Carry out the actions the policy enables (today: quarantine and release agents). Without it nothing changes.
+    [switch] $Enforce,
+    # Limit -Enforce to these asset ids, for a pilot or a test. Everything else is still reported.
+    [string[]] $EnforceAssetId = @(),
+    # Sign in through the browser for the Power Platform API instead of using the Azure CLI token.
+    [switch] $InteractiveSignIn,
     [string] $PublisherPrefix = 'rev'
 )
 
@@ -50,8 +67,14 @@ Import-Module (Join-Path $PSScriptRoot 'InactiveAssets.psm1') -Force
 # ---------- policy ----------
 $policy = Get-Content -Raw -Path $PolicyPath | ConvertFrom-Json
 if ($policy.mode -ne 'report') {
-    throw "Policy mode '$($policy.mode)' is not implemented. Only 'report' exists; this script never changes the tenant."
+    throw "Policy mode '$($policy.mode)' is not implemented. Only 'report' exists; actions are switched on one by one under 'enforcement'."
 }
+$quarantineAgents = $false
+if ($policy.PSObject.Properties['enforcement'] -and $policy.enforcement.PSObject.Properties['quarantineAgents']) {
+    $quarantineAgents = [bool]$policy.enforcement.quarantineAgents
+}
+$enforceAgents = [bool]$Enforce -and $quarantineAgents
+if ($Enforce -and -not $quarantineAgents) { Write-Warning '-Enforce was given but the policy enables no action (enforcement.quarantineAgents); nothing will be changed.' }
 $periods = [pscustomobject]@{
     inactiveDays          = [double]$policy.periods.inactiveDays
     quarantineWarningDays = [double]$policy.periods.quarantineWarningDays
@@ -130,6 +153,53 @@ function Get-Prop($Object, [string] $Name) {
 $PowerApps = 'https://service.powerapps.com/'
 $Flow = 'https://service.flow.microsoft.com/'
 $Graph = 'https://graph.microsoft.com/'
+$PowerPlatform = 'https://api.powerplatform.com'
+
+function Get-BrowserToken([string] $Resource) {
+    # Authorization code with PKCE through the default browser, as the Power Platform CLI's public client. That
+    # client carries CopilotStudio.AdminActions.Invoke; the Azure CLI's does not, and device code is blocked by
+    # Conditional Access in this tenant.
+    $clientId = '9cee029c-6210-4654-90bb-17e6e9d36617'
+    $tenant = az account show --query tenantId -o tsv
+    if ($LASTEXITCODE -ne 0 -or -not $tenant) { throw "Run 'az login --allow-no-subscriptions --tenant <tenant>' first; the browser sign-in uses its tenant." }
+    $redirect = 'http://localhost:8400'
+    $scope = "$($Resource.TrimEnd('/'))/.default"
+    $b64 = { param([byte[]] $Bytes) [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $buffer = New-Object byte[] 32; $rng.GetBytes($buffer); $verifier = & $b64 $buffer
+    $buffer = New-Object byte[] 16; $rng.GetBytes($buffer); $state = & $b64 $buffer
+    $challenge = & $b64 ([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::ASCII.GetBytes($verifier)))
+
+    $listener = New-Object System.Net.HttpListener
+    $listener.Prefixes.Add("$redirect/")
+    $listener.Start()
+    try {
+        Start-Process ("https://login.microsoftonline.com/$tenant/oauth2/v2.0/authorize?client_id=$clientId&response_type=code" +
+            "&redirect_uri=$([uri]::EscapeDataString($redirect))&response_mode=query&scope=$([uri]::EscapeDataString($scope))" +
+            "&state=$state&code_challenge=$challenge&code_challenge_method=S256&prompt=select_account")
+        Write-Host 'Waiting for the browser sign-in (Power Platform API)...'
+        $pending = $listener.GetContextAsync()
+        if (-not $pending.Wait(420000)) { throw 'Timed out waiting for the browser sign-in.' }
+        $query = $pending.Result.Request.QueryString
+        $page = [System.Text.Encoding]::UTF8.GetBytes('<html><body style="font-family:sans-serif">You can close this tab.</body></html>')
+        $pending.Result.Response.ContentType = 'text/html'
+        $pending.Result.Response.OutputStream.Write($page, 0, $page.Length)
+        $pending.Result.Response.Close()
+    }
+    finally { $listener.Stop() }
+    if (-not $query['code'] -or $query['state'] -ne $state) { throw "Browser sign-in failed: $($query['error']) $($query['error_description'])" }
+    $token = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" -Body @{
+        grant_type = 'authorization_code'; client_id = $clientId; code = $query['code']; redirect_uri = $redirect; code_verifier = $verifier; scope = $scope
+    }
+    return $token.access_token
+}
+if ($InteractiveSignIn) { $script:Tokens[$PowerPlatform] = Get-BrowserToken $PowerPlatform }
+
+function Get-ErrorText($ErrorRecord) {
+    $text = $ErrorRecord.Exception.Message
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) { $text = "$text $($ErrorRecord.ErrorDetails.Message)" }
+    return $text
+}
 
 $script:Users = @{}
 function Resolve-User([string] $ObjectId) {
@@ -172,7 +242,7 @@ $launchesThrough = $null
 if ($DataverseUrl) {
     Import-Module (Join-Path $PSScriptRoot 'Dataverse.psm1') -Force
     Connect-Dataverse $DataverseUrl
-    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_stage,${px}_lastrunon,${px}_lastlaunchon,statecode")) {
+    foreach ($row in @(Get-DvAll "${px}_governedassets?`$select=${px}_assetid,${px}_stage,${px}_lastrunon,${px}_lastlaunchon,${px}_platformstate,statecode")) {
         $known[[string]$row."${px}_assetid"] = $row
     }
     # The end of the audit window the last successful scan read. Launches before it are already stored per app.
@@ -209,7 +279,7 @@ function Add-Record($Asset) {
             PlatformState       = $Asset.PlatformState
             CreatedTime         = $Asset.CreatedTime
             LastModifiedTime    = $Asset.Signals['modified']
-            LastRunTime         = $Asset.Signals['run']
+            LastRunTime         = $(if ($Asset.Signals.ContainsKey('conversation')) { $Asset.Signals['conversation'] } else { $Asset.Signals['run'] })
             LastLaunchTime      = $Asset.Signals['launch']
             LastActivityTime    = $latest.When
             LastActivitySource  = $latest.Source
@@ -307,6 +377,56 @@ foreach ($environment in $envs) {
             }
         }
     }
+
+    if ($assetTypes -contains 'agent') {
+        # Agents live in the environment's Dataverse (bots table); there is no tenant-wide admin listing.
+        $instance = Get-Prop (Get-Prop $environment.properties 'linkedEnvironmentMetadata') 'instanceUrl'
+        if (-not $instance) { Write-Host "  $envName : no Dataverse, so no agents"; continue }
+        $dv = ([string]$instance).TrimEnd('/')
+        try {
+            $bots = @(Get-AllPages "$dv/api/data/v9.2/bots?`$select=botid,name,template,ismanaged,createdon,modifiedon,publishedon&`$expand=owninguser(`$select=fullname,domainname,azureactivedirectoryobjectid)" $dv)
+        }
+        catch {
+            $warnings.Add("Agents in '$envName' could not be listed (the scan's identity needs read access to the bots table there): $(Get-ErrorText $_)")
+            Write-Host "  $envName : agents unavailable"
+            continue
+        }
+        Write-Host "  $envName : $($bots.Count) agent(s)"
+        if ($bots.Count -gt 0) { $listed["$envId|agent"] = $true }
+        foreach ($b in $bots) {
+            if ($excludeManaged -and (Get-Prop $b 'ismanaged') -eq $true) { $skippedManaged++; continue }
+            $modified = ConvertTo-UtcDate (Get-Prop $b 'modifiedon')
+            $published = ConvertTo-UtcDate (Get-Prop $b 'publishedon')
+            $lastChat = $null
+            $usage = 'not-needed'
+            $newest = $modified; if ($null -ne $published -and ($null -eq $newest -or $published -gt $newest)) { $newest = $published }
+            if ($null -eq $newest -or $newest -lt $activeCutoff) {
+                try {
+                    $chats = Invoke-Api "$dv/api/data/v9.2/conversationtranscripts?`$select=conversationstarttime&`$filter=_bot_conversationtranscriptid_value eq $($b.botid)&`$orderby=conversationstarttime desc&`$top=1" $dv
+                    $usage = 'transcripts'
+                    foreach ($c in @($chats.value)) { if ($null -ne $c) { $lastChat = ConvertTo-UtcDate (Get-Prop $c 'conversationstarttime') } }
+                }
+                catch {
+                    $usage = 'unavailable'
+                    $warnings.Add("Conversations unavailable for agent '$($b.name)' ($($b.botid)): $(Get-ErrorText $_)")
+                }
+            }
+            # Transcripts are only kept about 30 days; keep the latest conversation ever seen for this agent.
+            if ($known.ContainsKey($b.botid)) {
+                $stored = ConvertTo-UtcDate (Get-Prop $known[$b.botid] "${px}_lastrunon")
+                if ($null -ne $stored -and ($null -eq $lastChat -or $stored -gt $lastChat)) { $lastChat = $stored }
+            }
+            $owner = Get-Prop $b 'owninguser'
+            Add-Record @{
+                AssetType = 'agent'; AssetSubtype = (Get-Prop $b 'template'); AssetId = $b.botid; DisplayName = $b.name
+                EnvironmentId = $envId; EnvironmentName = $envName
+                OwnerId = (Get-Prop $owner 'azureactivedirectoryobjectid'); OwnerUpn = (Get-Prop $owner 'domainname'); OwnerName = (Get-Prop $owner 'fullname')
+                PlatformState = $null; CreatedTime = (ConvertTo-UtcDate (Get-Prop $b 'createdon'))
+                Signals = @{ modified = $modified; published = $published; conversation = $lastChat }
+                UsageSignal = $usage
+            }
+        }
+    }
 }
 
 # ---------- app launches (audit log) ----------
@@ -352,6 +472,63 @@ if ($pendingApps.Count -gt 0) {
     }
 }
 
+# ---------- agent quarantine ----------
+# "Quarantined by policy" is remembered in the asset's platform state (Dataverse), so the scan only ever releases
+# what it quarantined itself.
+$PolicyQuarantined = 'Quarantined by policy'
+$actions = New-Object System.Collections.Generic.List[object]
+$apiBlocked = $null
+foreach ($r in @($records | Where-Object { $_.AssetType -eq 'agent' })) {
+    $held = $known.ContainsKey($r.AssetId) -and ((Get-Prop $known[$r.AssetId] "${px}_platformstate") -eq $PolicyQuarantined)
+    if ($held) { $r.PlatformState = $PolicyQuarantined }
+    $action = Get-AgentQuarantineAction -Stage $r.Stage -QuarantinedByPolicy $held
+    if (-not $action) { continue }
+    $entry = [pscustomobject][ordered]@{ Action = $action; AssetId = $r.AssetId; DisplayName = $r.DisplayName; EnvironmentName = $r.EnvironmentName; Stage = $r.Stage; Outcome = 'not enforced (report only)' }
+    $actions.Add($entry)
+    if (-not $enforceAgents) { continue }
+    if ($EnforceAssetId.Count -gt 0 -and $EnforceAssetId -notcontains $r.AssetId) { $entry.Outcome = 'not enforced (outside -EnforceAssetId)'; continue }
+    if ($apiBlocked) { $entry.Outcome = 'failed'; continue }
+    $base = "$PowerPlatform/copilotstudio/environments/$($r.EnvironmentId)/bots/$($r.AssetId)/api/botQuarantine"
+    try {
+        $status = Invoke-Api "${base}?api-version=1" $PowerPlatform
+        if ($action -eq 'Quarantine') {
+            if ($status.isBotQuarantined) {
+                # Someone else quarantined it. Record that, but do not claim it: it is not this policy's to release.
+                $r.PlatformState = 'Quarantined'
+                $entry.Outcome = 'already quarantined, left as is'
+                continue
+            }
+            $result = Invoke-Api "$base/SetAsQuarantined?api-version=1" $PowerPlatform 'Post'
+            if (-not $result.isBotQuarantined) { throw 'the API answered without confirming the quarantine' }
+            $r.PlatformState = $PolicyQuarantined
+            $entry.Outcome = 'quarantined'
+        }
+        else {
+            if ($status.isBotQuarantined) {
+                $result = Invoke-Api "$base/SetAsUnquarantined?api-version=1" $PowerPlatform 'Post'
+                if ($result.isBotQuarantined) { throw 'the API answered without confirming the release' }
+            }
+            $r.PlatformState = $null
+            $entry.Outcome = 'released'
+        }
+        Write-Host "Agent '$($r.DisplayName)': $($entry.Outcome)"
+    }
+    catch {
+        $entry.Outcome = 'failed'
+        $why = Get-ErrorText $_
+        $code = 0
+        if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($code -in 401, 403) {
+            # The identity is not allowed to use the quarantine API at all; the other agents would fail the same way.
+            $apiBlocked = $why
+            $warnings.Add("Agent quarantine is not available to this identity, so no agent was changed. The API needs a token carrying CopilotStudio.AdminActions.Invoke (locally: -InteractiveSignIn). $why")
+        }
+        else { $warnings.Add("Could not $($action.ToLower()) agent '$($r.DisplayName)' ($($r.AssetId)): $why") }
+        Write-Host "Agent '$($r.DisplayName)': $($action.ToLower()) failed"
+    }
+}
+$changed = @($actions | Where-Object { $_.Outcome -in 'quarantined', 'released' }).Count
+
 # ---------- output ----------
 $stageOrder = @('Delete', 'DeleteWarning', 'Quarantine', 'QuarantineWarning', 'Exempt', 'Active')
 $sorted = @($records | Sort-Object @{ Expression = { [array]::IndexOf($stageOrder, $_.Stage) } }, @{ Expression = 'DaysInactive'; Descending = $true })
@@ -362,9 +539,10 @@ New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
 $report = [ordered]@{
     scanTime      = $scanTime
     evaluatedAsOf = $now
-    mode          = 'report'
+    mode          = $(if ($enforceAgents) { 'enforce' } else { 'report' })
     periods       = $periods
     counts        = [ordered]@{}
+    agentActions  = $actions.ToArray() # not @($actions): that throws on a List[object] in Windows PowerShell 5.1
     warnings      = @($warnings)
     assets        = $sorted
 }
@@ -373,7 +551,8 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $OutputPath 'in
 $sorted | Export-Csv -Path (Join-Path $OutputPath 'inactive-assets.csv') -NoTypeInformation -Encoding utf8
 
 $md = New-Object System.Collections.Generic.List[string]
-$md.Add('## Inactive asset scan (report only, nothing was changed)')
+if ($enforceAgents) { $md.Add("## Inactive asset scan (agent quarantine enforced: $changed agent(s) changed; apps and flows are report only)") }
+else { $md.Add('## Inactive asset scan (report only, nothing was changed)') }
 $md.Add('')
 $md.Add("Evaluated as of **$($now.ToString('u'))**. Periods (days): inactive $($periods.inactiveDays), quarantine warning $($periods.quarantineWarningDays), quarantined $($periods.quarantinedDays), delete warning $($periods.deleteWarningDays).")
 $md.Add('')
@@ -398,9 +577,17 @@ if (@($sorted | Where-Object { $_.AssetType -eq 'app' }).Count -gt 0) {
     $md.Add('')
     $md.Add("> $launchNote")
 }
+if ($actions.Count -gt 0) {
+    $md.Add('')
+    $md.Add('**Agent quarantine**')
+    $md.Add('')
+    $md.Add('| Action | Agent | Environment | Stage | Outcome |')
+    $md.Add('|---|---|---|---|---|')
+    foreach ($a in $actions) { $md.Add("| $($a.Action) | $(([string]$a.DisplayName).Replace('|', '/')) | $($a.EnvironmentName) | $($a.Stage) | $($a.Outcome) |") }
+}
 if ($skippedManaged -gt 0) {
     $md.Add('')
-    $md.Add("$skippedManaged flow(s) from managed solutions were skipped (excludeManaged).")
+    $md.Add("$skippedManaged flow(s) or agent(s) from managed solutions were skipped (excludeManaged).")
 }
 if ($warnings.Count -gt 0) {
     $md.Add('')
@@ -430,7 +617,7 @@ if ($DataverseUrl) {
         "${px}_name"                   = "Scan $($scanTime.ToString('yyyy-MM-dd HH:mm'))Z"
         "${px}_scanon"                 = (Iso $scanTime)
         "${px}_evaluatedasof"          = (Iso $now)
-        "${px}_mode"                   = 'report'
+        "${px}_mode"                   = $report.mode
         "${px}_istest"                 = $isTest
         "${px}_inactivedays"           = $periods.inactiveDays
         "${px}_quarantinewarningdays"  = $periods.quarantineWarningDays
@@ -517,4 +704,5 @@ if ($DataverseUrl) {
 
 Write-Host ''
 foreach ($st in $stageOrder) { Write-Host ("{0,-18} {1}" -f $st, $report.counts[$st]) }
+foreach ($g in @($actions | Group-Object Action, Outcome)) { Write-Host ("{0,-18} {1}" -f "agents: $($g.Count)", $g.Name) }
 Write-Host "Report written to $OutputPath"

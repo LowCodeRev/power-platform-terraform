@@ -5,7 +5,7 @@ Creates the Dataverse schema that the inactive asset scan logs to. Idempotent: a
 .DESCRIPTION
 Solution "InactiveAssetGovernance" under the publisher with the given customization prefix:
 
-  {p}_governedasset   one row per app or flow, holding its current lifecycle state (upserted by asset id)
+  {p}_governedasset   one row per app, flow or agent, holding its current lifecycle state (upserted by asset id)
   {p}_assetscan       one row per scan run: when, with which periods, and the count in each stage
   {p}_assetevent      one row each time an asset moves from one stage to another
 
@@ -48,7 +48,7 @@ else { Write-Host "[skip]   solution $SolutionName" }
 # ---------- global choices ----------
 $choices = [ordered]@{
     "${p}_assetlifecyclestage" = @{ Display = 'Asset Lifecycle Stage'; Options = @('Active', 'Quarantine Warning', 'Quarantine', 'Delete Warning', 'Delete', 'Exempt') }
-    "${p}_assettype"           = @{ Display = 'Asset Type'; Options = @('App', 'Flow') }
+    "${p}_assettype"           = @{ Display = 'Asset Type'; Options = @('App', 'Flow', 'Agent') }
 }
 $existingChoices = @((Invoke-Dv GET 'GlobalOptionSetDefinitions').value | ForEach-Object { $_.Name })
 $choiceIds = @{}
@@ -59,7 +59,18 @@ foreach ($name in $choices.Keys) {
         Invoke-Dv POST 'GlobalOptionSetDefinitions' @{ '@odata.type' = 'Microsoft.Dynamics.CRM.OptionSetMetadata'; Name = $name; DisplayName = (Label $choices[$name].Display); IsGlobal = $true; OptionSetType = 'Picklist'; Options = $options } -Headers $sol | Out-Null
         Write-Host "[create] choice $name"
     }
-    else { Write-Host "[skip]   choice $name" }
+    else {
+        # Options added to the list above after the choice was first created. Values follow list position.
+        $current = @((Invoke-Dv GET "GlobalOptionSetDefinitions(Name='$name')").Options | ForEach-Object { [int]$_.Value })
+        $added = 0
+        for ($i = 0; $i -lt $choices[$name].Options.Count; $i++) {
+            if ($current -contains ($optionBase + $i)) { continue }
+            Invoke-Dv POST 'InsertOptionValue' @{ OptionSetName = $name; Value = $optionBase + $i; Label = (Label $choices[$name].Options[$i]); SolutionUniqueName = $SolutionName } | Out-Null
+            Write-Host "[update] choice $name + $($choices[$name].Options[$i])"
+            $added++
+        }
+        if ($added -eq 0) { Write-Host "[skip]   choice $name" }
+    }
     $choiceIds[$name] = (Invoke-Dv GET "GlobalOptionSetDefinitions(Name='$name')").MetadataId
 }
 
@@ -219,6 +230,6 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($status -ne 'Active') { throw "Alternate key $keyName is '$status', expected Active." }
 
 # ---------- publish ----------
-$xml = '<importexportxml><entities>' + (($tables.Keys | ForEach-Object { "<entity>$_</entity>" }) -join '') + '</entities></importexportxml>'
+$xml = '<importexportxml><entities>' + (($tables.Keys | ForEach-Object { "<entity>$_</entity>" }) -join '') + '</entities><optionsets>' + (($choices.Keys | ForEach-Object { "<optionset>$_</optionset>" }) -join '') + '</optionsets></importexportxml>'
 Invoke-Dv POST 'PublishXml' @{ ParameterXml = $xml } | Out-Null
 Write-Host '[done]   published'
