@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "appId": "83a74569-574c-4135-8056-52abf7b1d1f6",
+  "appDisplayName": "Power Platform Governance Dashboard",
+  "region": "prod",
+  "appType": "CodeApp",
+  "environmentId": "50b383ee-e3db-ed10-983d-376a576cd404",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {},
+  "databaseReferences": {
+    "default.cds": {
+      "dataSources": {
+        "governedassets": {
+          "entitySetName": "rev_governedassets",
+          "logicalName": "rev_governedasset",
+          "isHidden": false
+        },
+        "assetscans": {
+          "entitySetName": "rev_assetscans",
+          "logicalName": "rev_assetscan",
+          "isHidden": false
+        },
+        "assetevents": {
+          "entitySetName": "rev_assetevents",
+          "logicalName": "rev_assetevent",
+          "isHidden": false
+        }
+      },
+      "environmentVariableName": ""
+    }
+  }
+}
